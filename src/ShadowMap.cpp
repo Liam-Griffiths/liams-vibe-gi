@@ -25,6 +25,7 @@ void ShadowMap::setupShadowMap() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER); 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    
     float borderColor[] = { 1.0, 1.0, 1.0, 1.0 };
     glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
     
@@ -51,10 +52,16 @@ void ShadowMap::bindForReading(unsigned int textureUnit) {
     glBindTexture(GL_TEXTURE_2D, depthMap);
 }
 
-glm::mat4 ShadowMap::getLightSpaceMatrix(const glm::vec3& lightPos) {
-    float near_plane = 1.0f, far_plane = 15.0f;
-    glm::mat4 lightProjection = glm::ortho(-12.0f, 12.0f, -12.0f, 12.0f, near_plane, far_plane);
-    glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0, 1.0, 0.0));
+glm::mat4 ShadowMap::getLightSpaceMatrix(const glm::vec3& lightPos, float lightRadius) {
+    float near_plane = 1.0f, far_plane = 25.0f; // Increased far plane
+    
+    // Much larger projection bounds based on light radius to eliminate cutoffs
+    float projectionSize = 15.0f + lightRadius * 3.0f; // Base 15 units + radius scaling
+    glm::mat4 lightProjection = glm::ortho(-projectionSize, projectionSize, -projectionSize, projectionSize, near_plane, far_plane);
+    
+    // Look at the scene center (origin) instead of a hardcoded point
+    glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
+    glm::mat4 lightView = glm::lookAt(lightPos, sceneCenter, glm::vec3(0.0, 1.0, 0.0));
     glm::mat4 lightSpaceMatrix = lightProjection * lightView;
     return lightSpaceMatrix;
 } 

@@ -6,7 +6,8 @@
 
 class ShadowMap {
 public:
-    static const unsigned int SHADOW_WIDTH = 4096, SHADOW_HEIGHT = 4096;
+    static const unsigned int SHADOW_WIDTH = 8192;  // Increased from 2048 to 8192
+    static const unsigned int SHADOW_HEIGHT = 8192; // Increased from 2048 to 8192
     
     unsigned int depthMapFBO;
     unsigned int depthMap;
@@ -16,7 +17,7 @@ public:
     
     void bindForWriting();
     void bindForReading(unsigned int textureUnit);
-    glm::mat4 getLightSpaceMatrix(const glm::vec3& lightPos);
+    glm::mat4 getLightSpaceMatrix(const glm::vec3& lightPos, float lightRadius = 2.0f);
     
 private:
     void setupShadowMap();
