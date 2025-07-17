@@ -7,11 +7,11 @@ uniform sampler2D gPosition;
 uniform sampler2D gNormal;
 uniform sampler2D texNoise;
 
-uniform vec3 samples[64];
+uniform vec3 samples[32];
 uniform mat4 projection;
 
 // SSAO parameters
-const int kernelSize = 64;
+const int kernelSize = 32;
 const float radius = 0.5;
 const float bias = 0.025;
 
@@ -19,7 +19,10 @@ void main()
 {
     // Get input for SSAO algorithm
     vec3 fragPos = texture(gPosition, TexCoords).xyz;
-    vec3 normal = normalize(texture(gNormal, TexCoords).rgb);
+    // Reconstruct normal from RG16F format
+    vec2 normalXY = texture(gNormal, TexCoords).rg;
+    float normalZ = sqrt(max(0.0, 1.0 - dot(normalXY, normalXY)));
+    vec3 normal = normalize(vec3(normalXY, normalZ));
     vec3 randomVec = normalize(texture(texNoise, TexCoords * vec2(textureSize(gPosition, 0)) / 4.0).xyz);
     
     // Create TBN matrix to transform samples to view space

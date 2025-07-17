@@ -1,6 +1,6 @@
 #version 330 core
 layout (location = 0) out vec3 gPosition;
-layout (location = 1) out vec3 gNormal;
+layout (location = 1) out vec2 gNormal;
 layout (location = 2) out vec4 gAlbedo;
 layout (location = 3) out float gLinearDepth;
 layout (location = 4) out vec2 gVelocity; // New: motion vector output
@@ -58,7 +58,7 @@ void main()
     } else {
         normal = normalize(ViewNormal);
     }
-    gNormal = normal;
+    gNormal = normal.xy; // Store only X,Y - Z can be reconstructed
     
     // Calculate albedo (either from texture or material/object color)
     vec3 albedo;

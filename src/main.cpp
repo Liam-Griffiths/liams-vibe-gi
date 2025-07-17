@@ -29,6 +29,7 @@
  * - M: Toggle ambient lighting
  * - G: Toggle global illumination
  * - T: Toggle SSAO
+
  * - R: Reset temporal accumulation
  * - Space: Pause/unpause
  * - ESC: Exit
@@ -68,13 +69,13 @@
 
 // Function prototypes
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
-void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCascades& rc, float deltaTime, bool& ambientEnabled, bool& giEnabled, bool& ssaoEnabled, bool& paused, float& pausedTime);
+void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCascades& rc, float deltaTime, bool& ambientEnabled, bool& giEnabled, bool& ssaoEnabled, bool& paused, float& pausedTime, int& qualityLevel, bool& quickPerformanceMode);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 
 // Global variables for mouse input handling
 bool firstMouse = true;
-float lastX = 800.0f / 2.0;
-float lastY = 600.0f / 2.0;
+float lastX = 1280.0f / 2.0;
+float lastY = 800.0f / 2.0;
 
 /**
  * Main rendering loop and application entry point
@@ -85,7 +86,7 @@ float lastY = 600.0f / 2.0;
 int main() {
     try {
         // Initialize main window with OpenGL context
-        Window window(800, 600, "Vibe-GI: Global Illumination Renderer");
+        Window window(1280, 800, "Vibe-GI: Global Illumination Renderer");
 
         // Set up window callbacks for input handling
         glfwSetFramebufferSizeCallback(window.getGLFWWindow(), framebuffer_size_callback);
@@ -102,7 +103,8 @@ int main() {
         Shader rcShader("shaders/fullscreen.vert", "shaders/rc_cascade.frag");            // Radiance cascades computation
         Shader blurShader("shaders/fullscreen.vert", "shaders/blur.frag");                // GI temporal blur
         Shader compositeShader("shaders/fullscreen.vert", "shaders/final_composite.frag"); // Final lighting composite
-        Shader taaShader("shaders/fullscreen.vert", "shaders/taa.frag");                  // Temporal anti-aliasing
+
+        Shader copyShader("shaders/fullscreen.vert", "shaders/copy.frag");               // Direct copy (no AA)
         Shader ssaoShader("shaders/fullscreen.vert", "shaders/ssao.frag");                // Screen-space ambient occlusion
         Shader ssaoBlurShader("shaders/fullscreen.vert", "shaders/ssao_blur.frag");       // SSAO blur for noise reduction
         Shader textShader("shaders/text.vert", "shaders/text.frag");                      // UI text rendering
@@ -112,7 +114,7 @@ int main() {
 
         // Initialize core rendering systems
         ShadowMap shadowMap;                                    // Directional light shadow mapping
-        RadianceCascades rc(800, 600, 6);                      // 6-cascade radiance cascade GI system
+        RadianceCascades rc(1280, 800, 4);                     // 4-cascade radiance cascade GI system (optimized)
         FullscreenQuad quad;                                    // Fullscreen quad for post-processing
 
         // Create offscreen framebuffer for composite pass (before TAA)
@@ -122,7 +124,7 @@ int main() {
         glGenFramebuffers(1, &compositeFBO);
         glGenTextures(1, &compositeTexture);
         glBindTexture(GL_TEXTURE_2D, compositeTexture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 800, 600, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 1280, 800, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         
@@ -143,6 +145,9 @@ int main() {
         bool ambientEnabled = true;     // Toggle for ambient lighting
         bool giEnabled = true;          // Toggle for global illumination
         bool ssaoEnabled = true;        // Toggle for screen space ambient occlusion
+        int qualityLevel = 1;           // Quality level: 0=performance, 1=balanced, 2=quality
+        bool quickPerformanceMode = false; // Quick performance toggle
+
         float deltaTime = 0.0f;         // Frame time delta
         float lastFrame = 0.0f;         // Previous frame timestamp
         int frameCount = 0;             // Frame counter for FPS calculation
@@ -175,7 +180,7 @@ int main() {
             }
 
             // Process user input (camera movement, light controls, toggles)
-            processInput(window.getGLFWWindow(), scene.camera, scene, rc, deltaTime, ambientEnabled, giEnabled, ssaoEnabled, paused, pausedTime);
+            processInput(window.getGLFWWindow(), scene.camera, scene, rc, deltaTime, ambientEnabled, giEnabled, ssaoEnabled, paused, pausedTime, qualityLevel, quickPerformanceMode);
 
             // Extract light information from ECS for rendering
             // In a real engine, this would support multiple lights
@@ -222,7 +227,9 @@ int main() {
             glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 100.0f);
             glm::mat4 view = scene.camera.getViewMatrix();
 
-            // Store previous frame matrices for temporal effects (TAA, motion vectors)
+            // No more jittering - clean, stable rendering
+            
+            // Store previous frame matrices (for potential future effects)
             static glm::mat4 previousView = view;
             static glm::mat4 previousProjection = projection;
 
@@ -290,7 +297,8 @@ int main() {
             
             // PASS 3: SCREEN SPACE AMBIENT OCCLUSION (SSAO)
             // Compute ambient occlusion for enhanced depth perception (if enabled)
-            if (ssaoEnabled) {
+            // Skip SSAO in quick performance mode or performance quality level
+            if (ssaoEnabled && !quickPerformanceMode && qualityLevel > 0) {
                 rc.computeSSAO(ssaoShader, projection);
                 
                 // PASS 4: SSAO BLUR
@@ -298,20 +306,28 @@ int main() {
                 rc.blurSSAO(ssaoBlurShader);
             }
             
+            // Determine cascade count based on quality level - move outside GI check for consistency
+            int activeCascades = (giEnabled && !quickPerformanceMode) ? 
+                (qualityLevel == 0 ? 3 : qualityLevel == 1 ? 3 : 4) : 0;  // Changed performance to 3 cascades to fix oversaturation
+            // Clamp to valid range for safety
+            activeCascades = std::max(0, std::min(activeCascades, 4));
+            
             // PASS 5: RADIANCE CASCADES GLOBAL ILLUMINATION
             // Compute multi-bounce indirect lighting using radiance cascades
-            if (giEnabled) {
+            // Disable in quick performance mode
+            if (giEnabled && !quickPerformanceMode) {
                 rcShader.use();
                 rcShader.setMat4("invView", glm::inverse(view)); // For world space calculations
                 rcShader.setVec3("lightPos", lightPos);          // World space light position
                 rcShader.setVec3("lightColor", lightColor);      // Light color and intensity
                 rcShader.setFloat("lightRadius", lightRadius);   // Light attenuation radius
                 rcShader.setFloat("time", glfwGetTime());         // Time for temporal effects
-                rc.compute(rcShader, view, projection);
+                rcShader.setInt("activeCascades", activeCascades); // Dynamic cascade count
+                rc.compute(rcShader, view, projection, activeCascades);
                 
                 // PASS 6: GI TEMPORAL BLUR
                 // Apply blur to GI for temporal stability and noise reduction
-                rc.blur(blurShader);
+                rc.blur(blurShader, activeCascades);
             }
             
             // PASS 7: FINAL COMPOSITE TO OFFSCREEN BUFFER
@@ -330,9 +346,14 @@ int main() {
             compositeShader.setVec3("lightColor", lightColor);
             compositeShader.setVec3("viewPos", scene.camera.position);
             compositeShader.setFloat("lightRadius", lightRadius);
-            compositeShader.setFloat("ssgiStrength", giEnabled ? 2.0f : 0.0f); // Conditional GI strength
+            // Adjust GI strength: performance mode gets reduced strength to prevent oversaturation
+            float giStrength = 0.0f;
+            if (giEnabled && !quickPerformanceMode) {
+                giStrength = (qualityLevel == 0) ? 0.8f : 1.2f;  // Lower strength for performance mode
+            }
+            compositeShader.setFloat("ssgiStrength", giStrength);
             compositeShader.setFloat("ambientStrength", ambientEnabled ? 0.15f : 0.0f);
-            compositeShader.setFloat("ssaoStrength", ssaoEnabled ? 1.0f : 0.0f); // Conditional SSAO contribution
+            compositeShader.setFloat("ssaoStrength", (ssaoEnabled && !quickPerformanceMode && qualityLevel > 0) ? 1.0f : 0.0f); // Conditional SSAO contribution
             
             // Bind all G-buffer textures for lighting calculations
             compositeShader.setInt("gPosition", 0);
@@ -341,10 +362,15 @@ int main() {
             compositeShader.setInt("shadowMap", 3);
             compositeShader.setInt("ssaoTexture", 10);
             
-            // Bind radiance cascade textures (multi-scale GI data)
-            for (int i = 0; i < 6; ++i) {
+            // Bind radiance cascade textures (multi-scale GI data) - only active cascades
+            for (int i = 0; i < activeCascades; ++i) {
                 compositeShader.setInt("rcTexture[" + std::to_string(i) + "]", 4 + i);
             }
+            // Ensure unused cascade slots are set to safe values
+            for (int i = activeCascades; i < 6; ++i) {
+                compositeShader.setInt("rcTexture[" + std::to_string(i) + "]", 0); // Bind to position texture as safe fallback
+            }
+            compositeShader.setInt("activeCascades", activeCascades);
             
             // Activate and bind all required textures
             glActiveTexture(GL_TEXTURE0);
@@ -360,10 +386,15 @@ int main() {
             glActiveTexture(GL_TEXTURE10);
             glBindTexture(GL_TEXTURE_2D, rc.getSSAOBlurTexture());
             
-            // Bind all cascade textures for GI sampling
-            for (int i = 0; i < 6; ++i) {
+            // Bind all cascade textures for GI sampling - only active cascades
+            for (int i = 0; i < activeCascades; ++i) {
                 glActiveTexture(GL_TEXTURE4 + i);
                 glBindTexture(GL_TEXTURE_2D, rc.getTexture(i));
+            }
+            // Bind safe fallback textures to unused cascade slots
+            for (int i = activeCascades; i < 6; ++i) {
+                glActiveTexture(GL_TEXTURE4 + i);
+                glBindTexture(GL_TEXTURE_2D, rc.getGPosition()); // Safe fallback texture
             }
 
             // Render fullscreen quad to perform lighting calculations
@@ -371,36 +402,21 @@ int main() {
             
             glEnable(GL_DEPTH_TEST);
 
-            // PASS 8: TEMPORAL ANTI-ALIASING (TAA) TO SCREEN
-            // Apply temporal upsampling to reduce aliasing artifacts
+            // PASS 8: FINAL OUTPUT TO SCREEN
+            // Direct copy to screen - simple and fast
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glDisable(GL_DEPTH_TEST);
 
-            taaShader.use();
-            taaShader.setInt("currentFrame", 0);
-            taaShader.setInt("historyFrame", 1);
-            taaShader.setInt("velocityBuffer", 2);
-            taaShader.setInt("depthBuffer", 3);
+            copyShader.use();
+            copyShader.setInt("inputTexture", 0);
 
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, compositeTexture);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, rc.getHistoryTexture());
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, rc.getGVelocity());
-            glActiveTexture(GL_TEXTURE3);
-            glBindTexture(GL_TEXTURE_2D, rc.getGPosition()); // Using position.z as depth
 
             quad.render();
 
             glEnable(GL_DEPTH_TEST);
-
-            // Update temporal history for next frame
-            // Copy current composite result to history texture for TAA
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, compositeFBO);
-            glBindTexture(GL_TEXTURE_2D, rc.getHistoryTexture());
-            glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
 
             // PASS 9: DEBUG UI RENDERING
             // Render performance metrics and control information
@@ -415,19 +431,28 @@ int main() {
                 textRenderer.RenderText("WASD: Move camera", 25.0f, 170.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
                 textRenderer.RenderText("Mouse: Look around", 25.0f, 150.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
                 textRenderer.RenderText("M: Toggle Ambient, G: Toggle GI, T: Toggle SSAO", 25.0f, 130.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
-                textRenderer.RenderText("Arrow Keys: Move Light, K/L: Height", 25.0f, 110.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
-                textRenderer.RenderText("O/P: Light Intensity, I/U: Light Radius", 25.0f, 90.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
+                textRenderer.RenderText("Z: Quality Level, Q: Quick Performance Mode", 25.0f, 110.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
+                textRenderer.RenderText("Arrow Keys: Move Light, K/L: Height", 25.0f, 90.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
+                textRenderer.RenderText("O/P: Light Intensity, I/U: Light Radius", 25.0f, 70.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
                 std::string fpsText = "FPS: " + std::to_string(fps);
-                textRenderer.RenderText(fpsText, 25.0f, 70.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
+                textRenderer.RenderText(fpsText, 25.0f, 50.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
                 std::string giStatusText = "GI: " + std::string(giEnabled ? "ON" : "OFF");
-                textRenderer.RenderText(giStatusText, 25.0f, 50.0f, 0.5f, giEnabled ? glm::vec3(0.0, 1.0, 0.0) : glm::vec3(1.0, 0.0, 0.0), ortho);
+                textRenderer.RenderText(giStatusText, 200.0f, 50.0f, 0.5f, giEnabled ? glm::vec3(0.0, 1.0, 0.0) : glm::vec3(1.0, 0.0, 0.0), ortho);
                 std::string ssaoStatusText = "SSAO: " + std::string(ssaoEnabled ? "ON" : "OFF");
-                textRenderer.RenderText(ssaoStatusText, 25.0f, 30.0f, 0.5f, ssaoEnabled ? glm::vec3(0.0, 1.0, 0.0) : glm::vec3(1.0, 0.0, 0.0), ortho);
+                textRenderer.RenderText(ssaoStatusText, 280.0f, 50.0f, 0.5f, ssaoEnabled ? glm::vec3(0.0, 1.0, 0.0) : glm::vec3(1.0, 0.0, 0.0), ortho);
+                
+                // Quality and performance status
+                std::string qualityText = "Quality: " + (qualityLevel == 0 ? std::string("Performance (3C)") : qualityLevel == 1 ? std::string("Balanced (3C)") : std::string("High (4C)"));
+                textRenderer.RenderText(qualityText, 380.0f, 50.0f, 0.5f, glm::vec3(1.0, 1.0, 0.0), ortho);
+                if (quickPerformanceMode) {
+                    textRenderer.RenderText("QUICK PERF MODE", 25.0f, 30.0f, 0.5f, glm::vec3(1.0, 0.5, 0.0), ortho);
+                }
+
                 glDisable(GL_BLEND);
                 glEnable(GL_DEPTH_TEST);
             }
 
-            // Store matrices for next frame's temporal effects
+            // Store matrices for next frame
             previousView = view;
             previousProjection = projection;
 
@@ -465,10 +490,11 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
  * @param ambientEnabled Reference to ambient lighting toggle
  * @param giEnabled     Reference to GI toggle
  * @param ssaoEnabled   Reference to SSAO toggle
+
  * @param paused        Reference to pause state
  * @param pausedTime    Time when pause was activated
  */
-void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCascades& rc, float deltaTime, bool& ambientEnabled, bool& giEnabled, bool& ssaoEnabled, bool& paused, float& pausedTime) {
+void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCascades& rc, float deltaTime, bool& ambientEnabled, bool& giEnabled, bool& ssaoEnabled, bool& paused, float& pausedTime, int& qualityLevel, bool& quickPerformanceMode) {
     // Toggle ambient lighting with M key
     static bool lastM = false;
     bool currentM = glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS;
@@ -492,6 +518,22 @@ void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCasc
         ssaoEnabled = !ssaoEnabled;
     }
     lastT = currentT;
+    
+    // Toggle quality level with Z key (cycles: Performance -> Balanced -> Quality)
+    static bool lastZ = false;
+    bool currentZ = glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS;
+    if (!lastZ && currentZ) {
+        qualityLevel = (qualityLevel + 1) % 3;
+    }
+    lastZ = currentZ;
+    
+    // Quick performance mode toggle with Q key
+    static bool lastQ = false;
+    bool currentQ = glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS;
+    if (!lastQ && currentQ) {
+        quickPerformanceMode = !quickPerformanceMode;
+    }
+    lastQ = currentQ;
     
     // Reset temporal accumulation with R key (useful when lighting changes)
     static bool lastR = false;

@@ -51,9 +51,9 @@ void RadianceCascades::setupCascades() {
     glGenTextures(numCascades, cascadeTextures.data());
 
     for (int i = 0; i < numCascades; ++i) {
-        // Start at FULL resolution for better quality, then downsample more gradually
-        int res_x = std::max(128, screenWidth >> i); // Start at full resolution, min 128px
-        int res_y = std::max(128, screenHeight >> i);
+        // Start at quarter resolution for better performance, then downsample
+        int res_x = std::max(64, screenWidth >> (i + 2)); // Start at quarter resolution, min 64px
+        int res_y = std::max(64, screenHeight >> (i + 2));
         cascadeWidths[i] = res_x;
         cascadeHeights[i] = res_y;
 
@@ -89,10 +89,10 @@ void RadianceCascades::setupGBuffer() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gPosition, 0);
 
-    // Normal buffer (16-bit is more than enough for normals)
+    // Normal buffer (RG16F - reconstruct Z component for bandwidth savings)
     glGenTextures(1, &gNormal);
     glBindTexture(GL_TEXTURE_2D, gNormal);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, screenWidth, screenHeight, 0, GL_RGB, GL_HALF_FLOAT, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16F, screenWidth, screenHeight, 0, GL_RG, GL_HALF_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -201,12 +201,13 @@ void RadianceCascades::setupTemporalBuffers() {
     }
 }
 
-void RadianceCascades::blur(Shader& blurShader) {
+void RadianceCascades::blur(Shader& blurShader, int activeCascades) {
+    if (activeCascades == -1) activeCascades = numCascades; // Use all cascades by default
     blurShader.use();
     FullscreenQuad quad;
     
-    // Apply aggressive blur to ALL cascades for consistent smoothing
-    for (int i = 0; i < numCascades; ++i) {
+    // Apply blur to active cascades for consistent smoothing
+    for (int i = 0; i < activeCascades; ++i) {
         int res_x = cascadeWidths[i];
         int res_y = cascadeHeights[i];
         
@@ -309,7 +310,8 @@ void RadianceCascades::resize(int width, int height) {
     setupSSAO(); // Re-setup SSAO on resize
 }
 
-void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm::mat4& projection) {
+void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm::mat4& projection, int activeCascades) {
+    if (activeCascades == -1) activeCascades = numCascades; // Use all cascades by default
     shader.use();
     shader.setMat4("view", view);
     shader.setMat4("projection", projection);
@@ -324,7 +326,7 @@ void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm:
     bindForReading();
     FullscreenQuad quad;
     
-    for (int i = numCascades - 1; i >= 0; --i) {
+    for (int i = activeCascades - 1; i >= 0; --i) {
         int res_x = cascadeWidths[i];
         int res_y = cascadeHeights[i];
         
@@ -456,8 +458,8 @@ void RadianceCascades::setupSSAO() {
 void RadianceCascades::generateSSAOKernel() {
     ssaoKernel.clear();
     
-    // Generate 64 sample points in hemisphere
-    for (int i = 0; i < 64; ++i) {
+    // Generate 32 sample points in hemisphere (optimized)
+    for (int i = 0; i < 32; ++i) {
         glm::vec3 sample(
             ((float)rand() / RAND_MAX) * 2.0f - 1.0f,
             ((float)rand() / RAND_MAX) * 2.0f - 1.0f,
@@ -468,7 +470,7 @@ void RadianceCascades::generateSSAOKernel() {
         sample *= (float)rand() / RAND_MAX;
         
         // Bias samples toward origin for better results
-        float scale = (float)i / 64.0f;
+        float scale = (float)i / 32.0f;
         scale = 0.1f + scale * scale * (1.0f - 0.1f); // Lerp between 0.1 and 1.0
         sample *= scale;
         
@@ -506,7 +508,7 @@ void RadianceCascades::computeSSAO(Shader& ssaoShader, const glm::mat4& projecti
     ssaoShader.setMat4("projection", projection);
     
     // Send kernel samples to shader
-    for (int i = 0; i < 64; ++i) {
+    for (int i = 0; i < 32; ++i) {
         ssaoShader.setVec3("samples[" + std::to_string(i) + "]", ssaoKernel[i]);
     }
     

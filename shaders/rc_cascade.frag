@@ -46,7 +46,10 @@ float calculateSoftAttenuation(float distance, float radius) {
 
 vec4 computeRadiance(vec2 uv, int index) {
     vec3 viewPos = texture(gPosition, uv).xyz;
-    vec3 normal = normalize(texture(gNormal, uv).xyz);
+    // Reconstruct normal from RG16F format
+    vec2 normalXY = texture(gNormal, uv).rg;
+    float normalZ = sqrt(max(0.0, 1.0 - dot(normalXY, normalXY)));
+    vec3 normal = normalize(vec3(normalXY, normalZ));
     if (length(normal) < 0.1) return vec4(0.0, 0.0, 0.0, 1.0);
     
     // Convert to world space
@@ -90,7 +93,10 @@ vec4 computeRadiance(vec2 uv, int index) {
             float projectedDepth = -viewSample.z;
             if (sampledDepth > 0.0 && abs(projectedDepth - sampledDepth) < thickness * projectedDepth) {
                 vec3 sampleAlbedo = texture(gAlbedo, sampleUV).rgb;
-                vec3 sampleViewNormal = normalize(texture(gNormal, sampleUV).xyz);
+                // Reconstruct sample normal from RG16F format
+        vec2 sampleNormalXY = texture(gNormal, sampleUV).rg;
+        float sampleNormalZ = sqrt(max(0.0, 1.0 - dot(sampleNormalXY, sampleNormalXY)));
+        vec3 sampleViewNormal = normalize(vec3(sampleNormalXY, sampleNormalZ));
                 vec3 sampleWorldNormal = invViewNormal * sampleViewNormal;
                 vec3 sampleToLight = lightPos - worldSamplePos; // lightPos now world space
                 float distToLight = length(sampleToLight);

@@ -242,8 +242,8 @@ void Scene::loadShadowTestScene() {
     light->addComponent(std::make_unique<LightComponent>(glm::vec3(1.0f, 1.0f, 0.9f), 4.0f, 5.0f)); // Larger radius for softer light
     entities.push_back(std::move(light));
 
-    // Position camera for best shadow viewing
-    camera.position = glm::vec3(-3.0f, 2.0f, 5.0f);
+    // Position camera for best shadow viewing (moved back for better view)
+    camera.position = glm::vec3(-4.0f, 2.5f, 8.0f);
     camera.yaw = -45.0f;
     camera.pitch = -15.0f;
     camera.updateCameraVectors();

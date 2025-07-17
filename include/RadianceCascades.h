@@ -64,7 +64,7 @@ public:
      * @param view       Camera view matrix
      * @param projection Camera projection matrix
      */
-    void compute(Shader& shader, const glm::mat4& view, const glm::mat4& projection);
+    void compute(Shader& shader, const glm::mat4& view, const glm::mat4& projection, int activeCascades = -1);
     
     /**
      * Apply temporal blur to GI results for stability
@@ -72,7 +72,7 @@ public:
      * 
      * @param shader Blur shader for temporal filtering
      */
-    void blur(Shader& shader);
+    void blur(Shader& shader, int activeCascades = -1);
     
     // Screen Space Ambient Occlusion (SSAO)
     

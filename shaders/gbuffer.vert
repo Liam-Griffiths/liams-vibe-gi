@@ -12,13 +12,13 @@ out vec3 ViewNormal;
 out vec2 TexCoords;
 out vec3 ViewTangent;
 out vec3 ViewBitangent;
-out vec2 Velocity; // New: motion vector for TAA
+out vec2 Velocity; // Motion vector (simplified, no jittering)
 
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
-uniform mat4 previousView; // New: previous frame view
-uniform mat4 previousProjection; // New: previous frame projection
+uniform mat4 previousView;
+uniform mat4 previousProjection;
 
 void main()
 {
@@ -35,16 +35,16 @@ void main()
     ViewTangent = mat3(transpose(inverse(view * model))) * aTangent;
     ViewBitangent = mat3(transpose(inverse(view * model))) * aBitangent;
     
-    // Compute current NDC coordinates
+    // Simplified motion vectors for effects that might still need them
     vec4 currentClip = projection * viewPos;
-    vec3 currentNDC = currentClip.xyz / currentClip.w;
+    vec4 previousViewPos = previousView * vec4(FragPos, 1.0);
+    vec4 previousClip = previousProjection * previousViewPos;
     
-    // Compute previous NDC coordinates (assuming static model)
-    vec4 previousClip = previousProjection * previousView * model * vec4(aPos, 1.0);
-    vec3 previousNDC = previousClip.xyz / previousClip.w;
+    vec2 currentScreen = (currentClip.xy / currentClip.w) * 0.5 + 0.5;
+    vec2 previousScreen = (previousClip.xy / previousClip.w) * 0.5 + 0.5;
     
-    // Velocity is difference in UV space
-    Velocity = (currentNDC.xy - previousNDC.xy) * 0.5;
+    // Simple, clean motion vector
+    Velocity = currentScreen - previousScreen;
     
     gl_Position = currentClip;
 } 

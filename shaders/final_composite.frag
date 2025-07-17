@@ -7,8 +7,9 @@ uniform sampler2D gPosition;
 uniform sampler2D gNormal;
 uniform sampler2D gAlbedo;
 uniform sampler2D shadowMap;
-uniform sampler2D rcTexture[6]; // Reduced from 8 to 6 cascades
+uniform sampler2D rcTexture[6]; // Support up to 6 cascades
 uniform sampler2D ssaoTexture; // New: SSAO texture
+uniform int activeCascades; // Number of active cascades for current quality level
 
 // Lighting uniforms
 uniform vec3 lightPos;
@@ -70,7 +71,10 @@ float calculateSoftAttenuation(float distance, float radius) {
 void main()
 {
     vec3 position = texture(gPosition, TexCoords).xyz;
-    vec3 normal = texture(gNormal, TexCoords).xyz;
+    // Reconstruct normal from RG16F format
+    vec2 normalXY = texture(gNormal, TexCoords).rg;
+    float normalZ = sqrt(max(0.0, 1.0 - dot(normalXY, normalXY)));
+    vec3 normal = normalize(vec3(normalXY, normalZ));
     vec3 albedo = texture(gAlbedo, TexCoords).rgb;
     
     // Early exit for background pixels
@@ -115,7 +119,7 @@ void main()
     vec3 cascadeContributions[6];
     float cascadeWeights[6];
     
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < activeCascades; ++i) {
         // Smooth sampling with multiple taps for better interpolation
         vec3 smoothGi = vec3(0.0);
         float smoothBeta = 0.0;
@@ -150,7 +154,7 @@ void main()
     }
     
     // Now blend cascades smoothly with improved weighting
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < activeCascades; ++i) {
         vec3 cascadeGi = cascadeContributions[i];
         float cascadeBeta = cascadeWeights[i];
         
@@ -188,7 +192,10 @@ void main()
             
             vec2 neighborCoord = TexCoords + vec2(x, y) * screenTexelSize;
             vec3 neighborPos = texture(gPosition, neighborCoord).xyz;
-            vec3 neighborNormal = texture(gNormal, neighborCoord).xyz;
+            // Reconstruct neighbor normal from RG16F format
+        vec2 neighborNormalXY = texture(gNormal, neighborCoord).rg;
+        float neighborNormalZ = sqrt(max(0.0, 1.0 - dot(neighborNormalXY, neighborNormalXY)));
+        vec3 neighborNormal = normalize(vec3(neighborNormalXY, neighborNormalZ));
             
             // Only blend with similar geometry
             float depthDiff = abs(position.z - neighborPos.z);

@@ -10,7 +10,10 @@ uniform int blurDirection; // 0 = horizontal, 1 = vertical
 void main() {
     vec4 centerSample = texture(inputTexture, TexCoords);
     vec3 centerPos = texture(gPosition, TexCoords).xyz;
-    vec3 centerNormal = normalize(texture(gNormal, TexCoords).xyz);
+    // Reconstruct center normal from RG16F format
+    vec2 centerNormalXY = texture(gNormal, TexCoords).rg;
+    float centerNormalZ = sqrt(max(0.0, 1.0 - dot(centerNormalXY, centerNormalXY)));
+    vec3 centerNormal = normalize(vec3(centerNormalXY, centerNormalZ));
     
     // Early exit for background pixels
     if (length(centerNormal) < 0.1) {
@@ -50,7 +53,10 @@ void main() {
         
         vec4 sampleData = texture(inputTexture, sampleCoord);
         vec3 samplePos = texture(gPosition, sampleCoord).xyz;
-        vec3 sampleNormal = normalize(texture(gNormal, sampleCoord).xyz);
+                    // Reconstruct sample normal from RG16F format
+            vec2 sampleNormalXY = texture(gNormal, sampleCoord).rg;
+            float sampleNormalZ = sqrt(max(0.0, 1.0 - dot(sampleNormalXY, sampleNormalXY)));
+            vec3 sampleNormal = normalize(vec3(sampleNormalXY, sampleNormalZ));
         
         // Skip background pixels
         if (length(sampleNormal) < 0.1) continue;
