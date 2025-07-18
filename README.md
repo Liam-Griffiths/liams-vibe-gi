@@ -30,6 +30,14 @@ A casually vibe-coded yet sophisticated global illumination renderer built in C+
 - **Modern OpenGL**: Shader-based rendering pipeline
 - **Real-time Camera**: WASD + mouse controls for scene exploration
 
+## Dependencies
+
+This project uses git submodules to manage external dependencies:
+- **ImGui**: Included as a submodule at `third_party/imgui` for immediate mode GUI
+- **System libraries**: GLFW, GLM, FreeType (installed via package manager)
+
+When cloning, use `--recursive` flag or run `git submodule update --init --recursive` to fetch all dependencies.
+
 ## Prerequisites
 
 ### All Platforms
@@ -93,10 +101,15 @@ sudo pacman -S cmake gcc glfw glm freetype2 mesa
 ## Build Instructions
 
 ### Linux/macOS
-1. Clone the repository:
+1. Clone the repository with submodules:
    ```bash
-   git clone <repository-url>
+   git clone --recursive <repository-url>
    cd vibe-gi
+   ```
+   
+   **Note**: If you've already cloned without `--recursive`, initialize submodules:
+   ```bash
+   git submodule update --init --recursive
    ```
 
 2. Create and enter build directory:
@@ -116,10 +129,15 @@ sudo pacman -S cmake gcc glfw glm freetype2 mesa
    ```
 
 ### Windows (Visual Studio)
-1. Clone the repository:
+1. Clone the repository with submodules:
    ```cmd
-   git clone <repository-url>
+   git clone --recursive <repository-url>
    cd vibe-gi
+   ```
+   
+   **Note**: If you've already cloned without `--recursive`, initialize submodules:
+   ```cmd
+   git submodule update --init --recursive
    ```
 
 2. Create build directory:
@@ -140,8 +158,11 @@ sudo pacman -S cmake gcc glfw glm freetype2 mesa
 ### Windows (MSYS2/MinGW)
 1. In MSYS2 MinGW64 terminal:
    ```bash
-   git clone <repository-url>
+   git clone --recursive <repository-url>
    cd vibe-gi
+   
+   # If already cloned without --recursive:
+   # git submodule update --init --recursive
    mkdir build && cd build
    cmake .. -G "MinGW Makefiles"
    mingw32-make -j$(nproc)
