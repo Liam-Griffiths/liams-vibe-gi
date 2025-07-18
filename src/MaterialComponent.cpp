@@ -12,6 +12,14 @@ std::unique_ptr<MaterialComponent> MaterialComponent::createPBR(const std::strin
     return std::make_unique<MaterialComponent>(std::move(material));
 }
 
+std::unique_ptr<MaterialComponent> MaterialComponent::createPBR(const std::string& baseName, const glm::vec2& tiling, float heightScale) {
+    auto material = std::make_unique<Material>();
+    material->loadPBRMaterial(baseName);
+    material->tiling = tiling;
+    material->heightScale = heightScale;
+    return std::make_unique<MaterialComponent>(std::move(material));
+}
+
 std::unique_ptr<MaterialComponent> MaterialComponent::createSolid(const glm::vec3& color, float roughness, float metallic) {
     auto material = std::make_unique<Material>(color, roughness, metallic);
     return std::make_unique<MaterialComponent>(std::move(material));

@@ -97,6 +97,10 @@ public:
     float metallic;             ///< Metallic property (0 = dielectric, 1 = metal)
     float ambientOcclusion;     ///< Ambient occlusion factor (0 = full shadow, 1 = no shadow)
     
+    // Texture mapping properties
+    glm::vec2 tiling;           ///< Texture coordinate scaling for tiling (default: 1,1)
+    float heightScale;          ///< Height map displacement scale (default: 0.02)
+    
     // PBR Texture Maps (nullptr if not used)
     Texture* albedoMap;         ///< Base color texture (RGB)
     Texture* normalMap;         ///< Normal map for surface detail (RGB, tangent space)

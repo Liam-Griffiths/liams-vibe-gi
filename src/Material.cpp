@@ -95,6 +95,8 @@ void Material::initializeDefaults() {
     roughness = 0.5f;
     metallic = 0.0f;
     ambientOcclusion = 1.0f;
+    tiling = glm::vec2(1.0f, 1.0f); // Default 1x1 tiling
+    heightScale = 0.02f; // Subtle height displacement
     
     albedoMap = nullptr;
     normalMap = nullptr;
@@ -206,6 +208,13 @@ void Material::setUniforms(unsigned int shaderId) const {
     glUniform1i(glGetUniformLocation(shaderId, "hasRoughnessMap"), roughnessMap != nullptr);
     glUniform1i(glGetUniformLocation(shaderId, "hasMetallicMap"), metallicMap != nullptr);
     glUniform1i(glGetUniformLocation(shaderId, "hasAOMap"), aoMap != nullptr);
+    glUniform1i(glGetUniformLocation(shaderId, "hasHeightMap"), heightMap != nullptr);
+    
+    // Set texture coordinate scaling for tiling
+    glUniform2fv(glGetUniformLocation(shaderId, "materialTiling"), 1, &tiling[0]);
+    
+    // Set parallax mapping parameters
+    glUniform1f(glGetUniformLocation(shaderId, "heightScale"), heightScale);
     
     // Bind textures and set samplers
     if (albedoMap) {
@@ -227,5 +236,9 @@ void Material::setUniforms(unsigned int shaderId) const {
     if (aoMap) {
         glUniform1i(glGetUniformLocation(shaderId, "aoMap"), 4);
         aoMap->bind(4);
+    }
+    if (heightMap) {
+        glUniform1i(glGetUniformLocation(shaderId, "heightMap"), 5);
+        heightMap->bind(5);
     }
 } 

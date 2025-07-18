@@ -42,6 +42,7 @@ public:
     // Shared Mesh Resources (for performance - avoid duplicate loading)
     std::unique_ptr<Mesh> cubeMesh;                 ///< Shared cube geometry
     std::unique_ptr<Mesh> teapotMesh;               ///< Shared teapot model geometry
+    std::unique_ptr<Mesh> bunnyMesh;                ///< Shared bunny model geometry
     std::unique_ptr<Mesh> floorMesh;                ///< Shared floor plane geometry
 
     /**

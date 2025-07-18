@@ -306,6 +306,58 @@ void Scene::loadTeapotLightbox() {
         teapotMesh = std::make_unique<Mesh>(cubeVertices);
     }
 
+    // Load the bunny mesh
+    std::cout << "Attempting to load bunny model from: models/bunny.obj" << std::endl;
+    bunnyMesh = Mesh::loadFromOBJ("models/bunny.obj");
+    if (!bunnyMesh) {
+        std::cerr << "Failed to load bunny model, falling back to cube" << std::endl;
+        // Fallback to a simple cube if bunny loading fails
+        std::vector<Vertex> cubeVertices = {
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)}
+        };
+        bunnyMesh = std::make_unique<Mesh>(cubeVertices);
+    }
+
     // Create cube mesh for walls
     std::vector<Vertex> cubeVertices = {
         // positions          // normals
@@ -358,7 +410,7 @@ void Scene::loadTeapotLightbox() {
     auto floor = std::make_unique<Entity>();
     floor->addComponent(std::make_unique<TransformComponent>(glm::vec3(0.0f, -3.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(1.0f, 1.0f, 1.0f))); // No rotation - plane should be horizontal by default
     floor->addComponent(std::make_unique<MeshComponent>(floorMesh.get(), glm::vec3(1.0f, 1.0f, 1.0f))); // White base color, will be overridden by material
-    auto stoneMaterial = MaterialComponent::createPBR("stone"); // Load stone textures
+    auto stoneMaterial = MaterialComponent::createPBR("stone", glm::vec2(3.0f, 3.0f), 0.025f); // Load stone textures with tiling
     floor->addComponent(std::move(stoneMaterial));
     entities.push_back(std::move(floor));
 
@@ -392,11 +444,11 @@ void Scene::loadTeapotLightbox() {
     centerTeapot->addComponent(std::make_unique<MeshComponent>(teapotMesh.get(), glm::vec3(0.7f, 0.7f, 0.9f))); // Light blue
     entities.push_back(std::move(centerTeapot));
 
-    // Left teapot (scaled up for bigger room)
-    auto leftTeapot = std::make_unique<Entity>();
-    leftTeapot->addComponent(std::make_unique<TransformComponent>(glm::vec3(-3.5f, -2.0f, -1.5f), glm::vec3(0.0f, 30.0f, 0.0f), glm::vec3(0.9f, 0.9f, 0.9f))); // Larger
-    leftTeapot->addComponent(std::make_unique<MeshComponent>(teapotMesh.get(), glm::vec3(0.9f, 0.6f, 0.3f))); // Orange
-    entities.push_back(std::move(leftTeapot));
+    // Left bunny (yellow, scaled up for bigger room)
+    auto leftBunny = std::make_unique<Entity>();
+    leftBunny->addComponent(std::make_unique<TransformComponent>(glm::vec3(-3.5f, -2.0f, -1.5f), glm::vec3(0.0f, 30.0f, 0.0f), glm::vec3(0.9f, 0.9f, 0.9f))); // Larger
+    leftBunny->addComponent(std::make_unique<MeshComponent>(bunnyMesh.get(), glm::vec3(1.0f, 1.0f, 0.0f))); // Yellow
+    entities.push_back(std::move(leftBunny));
 
     // Right teapot (scaled up for bigger room)
     auto rightTeapot = std::make_unique<Entity>();
@@ -439,8 +491,8 @@ void Scene::loadStoneFloorScene() {
     // Create a large tiled stone floor using plane mesh
     floorMesh = Mesh::createPlane(20.0f, 20.0f, 10, 10); // Large floor with many segments for tiling
     
-    // Create the stone material
-    auto stoneMaterial = MaterialComponent::createPBR("stone");
+    // Create the stone material with proper tiling (4x4 repeats) and enhanced height scale
+    auto stoneMaterial = MaterialComponent::createPBR("stone", glm::vec2(4.0f, 4.0f), 0.03f);
     
     // Create floor entity with stone material
     auto floor = std::make_unique<Entity>();
