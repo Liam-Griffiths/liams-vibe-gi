@@ -31,4 +31,13 @@ add_executable(vibe-gi ${SOURCES} ${IMGUI_SOURCES})
 target_link_libraries(vibe-gi OpenGL::GL glfw glm::glm)
 add_custom_command(TARGET vibe-gi POST_BUILD
                    COMMAND ${CMAKE_COMMAND} -E copy_directory
-                   ${CMAKE_SOURCE_DIR}/shaders $<TARGET_FILE_DIR:vibe-gi>/shaders) 
+                   ${CMAKE_SOURCE_DIR}/shaders $<TARGET_FILE_DIR:vibe-gi>/shaders)
+
+# Create symlinks for asset directories
+add_custom_command(TARGET vibe-gi POST_BUILD
+                   COMMAND ${CMAKE_COMMAND} -E create_symlink
+                   ${CMAKE_SOURCE_DIR}/models $<TARGET_FILE_DIR:vibe-gi>/models)
+
+add_custom_command(TARGET vibe-gi POST_BUILD
+                   COMMAND ${CMAKE_COMMAND} -E create_symlink
+                   ${CMAKE_SOURCE_DIR}/textures $<TARGET_FILE_DIR:vibe-gi>/textures) 
