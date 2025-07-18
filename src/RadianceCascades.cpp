@@ -15,6 +15,7 @@ RadianceCascades::RadianceCascades(int width, int height, int num, float baseSpa
     setupTemporalBuffers();
     setupTAA(); // Add TAA setup
     setupSSAO(); // Add SSAO setup
+    setupSSR(); // Add SSR setup
 }
 
 RadianceCascades::~RadianceCascades() {
@@ -295,6 +296,14 @@ void RadianceCascades::cleanup() {
     glDeleteTextures(1, &ssaoTexture);
     glDeleteTextures(1, &ssaoBlurTexture);
     glDeleteTextures(1, &noiseTexture);
+    
+    // SSR cleanup
+    glDeleteFramebuffers(1, &ssrFBO);
+    glDeleteTextures(1, &ssrTexture);
+    
+    // TAA cleanup
+    glDeleteFramebuffers(1, &taaFBO);
+    glDeleteTextures(1, &taaTexture);
 }
 
 void RadianceCascades::resize(int width, int height) {
@@ -308,6 +317,7 @@ void RadianceCascades::resize(int width, int height) {
     setupTemporalBuffers();
     setupTAA(); // Re-setup TAA on resize
     setupSSAO(); // Re-setup SSAO on resize
+    setupSSR(); // Re-setup SSR on resize
 }
 
 void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm::mat4& projection, int activeCascades) {
@@ -539,6 +549,143 @@ void RadianceCascades::blurSSAO(Shader& blurShader) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ssaoTexture);
     blurShader.setInt("ssaoInput", 0);
+    
+    FullscreenQuad quad;
+    quad.render();
+    
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void RadianceCascades::setupSSR() {
+    // Create SSR framebuffer and texture
+    glGenFramebuffers(1, &ssrFBO);
+    glGenTextures(1, &ssrTexture);
+    
+    glBindTexture(GL_TEXTURE_2D, ssrTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, screenWidth, screenHeight, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    
+    glBindFramebuffer(GL_FRAMEBUFFER, ssrFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ssrTexture, 0);
+    
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::cerr << "SSR framebuffer incomplete!" << std::endl;
+    }
+    
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    
+    // Create TAA framebuffer and texture
+    glGenFramebuffers(1, &taaFBO);
+    glGenTextures(1, &taaTexture);
+    
+    glBindTexture(GL_TEXTURE_2D, taaTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, screenWidth, screenHeight, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    
+    glBindFramebuffer(GL_FRAMEBUFFER, taaFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, taaTexture, 0);
+    
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::cerr << "TAA framebuffer incomplete!" << std::endl;
+    }
+    
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void RadianceCascades::computeSSR(Shader& ssrShader, unsigned int colorTexture, const glm::mat4& view, 
+                                  const glm::mat4& projection, const glm::vec3& viewPos) {
+    glBindFramebuffer(GL_FRAMEBUFFER, ssrFBO);
+    glClear(GL_COLOR_BUFFER_BIT);
+    
+    ssrShader.use();
+    ssrShader.setMat4("view", view);
+    ssrShader.setMat4("projection", projection);
+    ssrShader.setVec3("viewPos", viewPos);
+    
+    // Bind G-buffer textures
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gPosition);
+    ssrShader.setInt("gPosition", 0);
+    
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, gNormal);
+    ssrShader.setInt("gNormal", 1);
+    
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, gAlbedo);
+    ssrShader.setInt("gAlbedo", 2);
+    
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, colorTexture);
+    ssrShader.setInt("colorTexture", 3);
+    
+    FullscreenQuad quad;
+    quad.render();
+    
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void RadianceCascades::applyTAA(Shader& taaShader, unsigned int currentFrame, 
+                                const glm::mat4& currentViewProj, const glm::mat4& previousViewProj) {
+    glBindFramebuffer(GL_FRAMEBUFFER, taaFBO);
+    glClear(GL_COLOR_BUFFER_BIT);
+    
+    taaShader.use();
+    taaShader.setMat4("currentViewProj", currentViewProj);
+    taaShader.setMat4("previousViewProj", previousViewProj);
+    taaShader.setFloat("frameCounter", float(frameCounter));
+    
+    // Bind textures
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, currentFrame);
+    taaShader.setInt("currentFrame", 0);
+    
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, historyTexture);
+    taaShader.setInt("historyFrame", 1);
+    
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, gVelocity);
+    taaShader.setInt("gVelocity", 2);
+    
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, gPosition);
+    taaShader.setInt("gPosition", 3);
+    
+    FullscreenQuad quad;
+    quad.render();
+    
+    // Copy result to history buffer for next frame
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, taaFBO);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    
+    // Create temporary FBO for history texture
+    GLuint tempFBO;
+    glGenFramebuffers(1, &tempFBO);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tempFBO);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, historyTexture, 0);
+    
+    glBlitFramebuffer(0, 0, screenWidth, screenHeight, 0, 0, screenWidth, screenHeight, 
+                      GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    
+    glDeleteFramebuffers(1, &tempFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void RadianceCascades::applyFXAA(Shader& fxaaShader, unsigned int inputTexture) {
+    glBindFramebuffer(GL_FRAMEBUFFER, taaFBO); // Reuse TAA FBO for FXAA output
+    glClear(GL_COLOR_BUFFER_BIT);
+    
+    fxaaShader.use();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, inputTexture);
+    fxaaShader.setInt("inputTexture", 0);
     
     FullscreenQuad quad;
     quad.render();

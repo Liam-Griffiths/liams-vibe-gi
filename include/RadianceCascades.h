@@ -67,12 +67,21 @@ public:
     void compute(Shader& shader, const glm::mat4& view, const glm::mat4& projection, int activeCascades = -1);
     
     /**
-     * Apply temporal blur to GI results for stability
-     * Reduces flickering and noise in the GI solution
+     * Apply temporal blur to smooth GI and reduce noise
+     * Uses separable bilateral filtering for quality and performance
      * 
-     * @param shader Blur shader for temporal filtering
+     * @param blurShader  Shader for blur computation
+     * @param activeCascades Number of cascades to blur (-1 for all)
      */
-    void blur(Shader& shader, int activeCascades = -1);
+    void blur(Shader& blurShader, int activeCascades = -1);
+    
+    /**
+     * Apply blur to a single cascade for selective performance optimization
+     * 
+     * @param blurShader     Shader for blur computation
+     * @param cascadeIndex   Index of cascade to blur
+     */
+    void blurSingleCascade(Shader& blurShader, int cascadeIndex);
     
     // Screen Space Ambient Occlusion (SSAO)
     
@@ -91,6 +100,52 @@ public:
      * @param blurShader SSAO blur shader
      */
     void blurSSAO(Shader& blurShader);
+    
+    // Screen Space Reflections (SSR)
+    
+    /**
+     * Compute Screen Space Reflections
+     * Provides realistic surface reflections for shiny materials
+     * 
+     * @param ssrShader SSR computation shader
+     * @param colorTexture Current frame color texture for reflection sampling
+     * @param view Current view matrix
+     * @param projection Current projection matrix
+     * @param viewPos Camera position in world space
+     */
+    void computeSSR(Shader& ssrShader, unsigned int colorTexture, const glm::mat4& view, 
+                    const glm::mat4& projection, const glm::vec3& viewPos);
+    
+    /**
+     * Apply SSR to final composite
+     * Blends screen space reflections with the lit scene
+     * 
+     * @param compositeShader Final composite shader
+     * @param ssrStrength Reflection strength multiplier
+     */
+    void applySSR(Shader& compositeShader, float ssrStrength);
+    
+    // Temporal Anti-Aliasing (TAA)
+    
+    /**
+     * Apply Temporal Anti-Aliasing to reduce aliasing artifacts
+     * Uses motion vectors and history buffer for temporal upsampling
+     * 
+     * @param taaShader TAA computation shader
+     * @param currentFrame Current frame texture
+     * @param currentViewProj Current view-projection matrix
+     * @param previousViewProj Previous frame's view-projection matrix
+     */
+    void applyTAA(Shader& taaShader, unsigned int currentFrame, 
+                  const glm::mat4& currentViewProj, const glm::mat4& previousViewProj);
+    
+    /**
+     * Apply FXAA (Fast Approximate Anti-Aliasing) as alternative to TAA
+     * 
+     * @param fxaaShader FXAA computation shader
+     * @param inputTexture Source texture to anti-alias
+     */
+    void applyFXAA(Shader& fxaaShader, unsigned int inputTexture);
     
     // System Management
     
@@ -173,6 +228,18 @@ public:
      */
     unsigned int getSSAOBlurTexture() const { return ssaoBlurTexture; }
     
+    /**
+     * Get SSR reflection texture
+     * Contains computed screen space reflections
+     */
+    unsigned int getSSRTexture() const { return ssrTexture; }
+    
+    /**
+     * Get TAA output texture
+     * Contains temporally anti-aliased frame
+     */
+    unsigned int getTAATexture() const { return taaTexture; }
+    
     // Framebuffer Binding Methods
     
     /**
@@ -249,6 +316,14 @@ private:
     unsigned int noiseTexture;                ///< Random noise texture for SSAO sampling
     std::vector<glm::vec3> ssaoKernel;        ///< Hemisphere sampling kernel for SSAO
     
+    // SSR Resources
+    unsigned int ssrFBO;                      ///< SSR framebuffer for reflection computation
+    unsigned int ssrTexture;                  ///< SSR reflection texture (RGB: reflection, A: strength)
+    
+    // TAA Resources
+    unsigned int taaFBO;                      ///< TAA framebuffer for temporal accumulation
+    unsigned int taaTexture;                  ///< TAA output texture
+    
     // Private Setup Methods
     
     /**
@@ -287,6 +362,11 @@ private:
      * Provides random rotation vectors to reduce banding artifacts
      */
     void generateNoiseTexture();
+    
+    /**
+     * Initialize Screen Space Reflection resources
+     */
+    void setupSSR();
     
     /**
      * Clean up all OpenGL resources

@@ -115,17 +115,39 @@ void main()
     vec3 indirectDiffuse = vec3(0.0);
     float totalWeight = 0.0;
     
-    // First, collect all cascade contributions with smooth sampling
+    // First, collect all cascade contributions with quality-aware smooth sampling
     vec3 cascadeContributions[6];
     float cascadeWeights[6];
     
     for (int i = 0; i < activeCascades; ++i) {
-        // Smooth sampling with multiple taps for better interpolation
+        // Quality-aware sampling with better upsampling for Ultra mode
         vec3 smoothGi = vec3(0.0);
         float smoothBeta = 0.0;
         
-        // For lower resolution cascades, use multiple samples for upsampling
-        if (i >= 2) { // Apply to cascades 2 and higher (lower resolution)
+        // Ultra mode: Enhanced sampling for all cascades
+        if (activeCascades >= 6 && i >= 1) {
+            vec2 texelSize = 1.0 / textureSize(rcTexture[i], 0);
+            
+            // Ultra mode: 5x5 high-quality upsampling kernel for smoother results
+            float totalWeight = 0.0;
+            for (int x = -2; x <= 2; ++x) {
+                for (int y = -2; y <= 2; ++y) {
+                    vec2 sampleCoord = TexCoords + vec2(x, y) * texelSize * 0.4;
+                    vec4 sampleData = texture(rcTexture[i], sampleCoord);
+                    
+                    // Gaussian-like weights for ultra-smooth upsampling
+                    float dist = sqrt(float(x*x + y*y));
+                    float weight = exp(-dist * dist * 0.5); // Gaussian falloff
+                    smoothGi += sampleData.rgb * weight;
+                    smoothBeta += sampleData.a * weight;
+                    totalWeight += weight;
+                }
+            }
+            smoothGi /= totalWeight;
+            smoothBeta /= totalWeight;
+        }
+        // Standard mode: 3x3 upsampling for cascades 2+
+        else if (i >= 2) {
             vec2 texelSize = 1.0 / textureSize(rcTexture[i], 0);
             
             // 3x3 smooth upsampling kernel
@@ -153,22 +175,38 @@ void main()
         cascadeWeights[i] = smoothBeta;
     }
     
-    // Now blend cascades smoothly with improved weighting
+    // Now blend cascades smoothly with quality-aware weighting
     for (int i = 0; i < activeCascades; ++i) {
         vec3 cascadeGi = cascadeContributions[i];
         float cascadeBeta = cascadeWeights[i];
         
-        // Improved cascade weighting with smoother falloff
-        float spatialWeight = pow(0.8, float(i)); // Slightly less aggressive falloff
+        // Quality-aware cascade weighting
+        float spatialWeight;
+        if (activeCascades >= 6) {
+            // Ultra mode: More sophisticated cascade weighting
+            spatialWeight = pow(0.75, float(i)); // Gentler falloff for more cascades
+        } else {
+            // Standard mode: normal falloff
+            spatialWeight = pow(0.8, float(i));
+        }
+        
         float betaWeight = cascadeBeta;
         
-        // Add inter-cascade smoothing
-        if (i > 0 && i < 5) {
-            // Blend with neighboring cascades for ultra-smooth transitions
+        // Ultra mode: Enhanced inter-cascade smoothing
+        if (activeCascades >= 6 && i > 0 && i < (activeCascades - 1)) {
+            // Ultra mode: smoother blending with neighboring cascades
             vec3 prevCascade = cascadeContributions[i-1];
             vec3 nextCascade = cascadeContributions[i+1];
             
-            float blendFactor = 0.1; // Subtle blending
+            float blendFactor = 0.08; // Reduced blending to prevent brightness accumulation
+            cascadeGi = mix(cascadeGi, (prevCascade + nextCascade) * 0.5, blendFactor);
+        }
+        // Standard inter-cascade smoothing for other modes
+        else if (i > 0 && i < (activeCascades - 1)) {
+            vec3 prevCascade = cascadeContributions[i-1];
+            vec3 nextCascade = cascadeContributions[i+1];
+            
+            float blendFactor = 0.08; // Subtle blending
             cascadeGi = mix(cascadeGi, (prevCascade + nextCascade) * 0.5, blendFactor);
         }
         
@@ -217,8 +255,13 @@ void main()
     
     indirectDiffuse = smoothedIndirect;
     
-    // Scale indirect lighting
-    indirectDiffuse *= ssgiStrength * 0.4; // Reduced from 1.0 to prevent over-brightening
+    // Quality-aware indirect lighting scaling
+    float qualityMultiplier = 0.4; // Base multiplier
+    if (activeCascades >= 6) {
+        // Ultra mode: Moderate reduction now that ambient/exposure are fixed
+        qualityMultiplier = 0.22; // Moderate reduction for Ultra mode
+    }
+    indirectDiffuse *= ssgiStrength * qualityMultiplier;
     
     // Sample SSAO
     float ambientOcclusion = texture(ssaoTexture, TexCoords).r;
@@ -239,11 +282,11 @@ void main()
     // Combine final lighting: diffuse (with albedo and AO) + specular (without albedo) + ambient (with AO)
     vec3 finalColor = diffuseContribution + directSpecular + ambient;
     
-    // Much lower exposure to prevent over-brightening
-    float exposure = 0.4; // Reduced from 0.8
+    // FIXED: Apply exposure BEFORE tone mapping
+    float exposure = 0.35; // Reduced base exposure
     finalColor *= exposure;
     
-    // Simple Reinhard tone mapping instead of aggressive ACES
+    // Simple Reinhard tone mapping for all modes (no Ultra special handling)
     finalColor = finalColor / (1.0 + finalColor);
     
     // Gamma correction

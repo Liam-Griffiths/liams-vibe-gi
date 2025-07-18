@@ -19,6 +19,7 @@ uniform vec3 lightPos;
 uniform vec3 lightColor;
 uniform float lightRadius; // New: light size parameter
 uniform mat4 invView; // New: inverse view for world space
+uniform int activeCascades; // New: for quality-aware computation
 
 // Much more stable random function with spatial seeds only
 float rand(vec2 co) {
@@ -59,11 +60,24 @@ vec4 computeRadiance(vec2 uv, int index) {
     
     vec3 gi = vec3(0.0);
     int numHits = 0;
-    // LOD-based sampling: fewer samples for higher cascades (they contribute less)
-    int numSamples = max(4, 10 - index * 2); // 10, 8, 6, 4, 4, 4 samples per cascade
+    
+    // Quality-aware sampling based on total cascades (higher quality = more cascades = more samples)
+    int baseSamples = 8; // Base sample count
+    int extraSamples = max(0, (activeCascades - 2) * 3); // +3 samples per cascade above 2
+    int numSamples = baseSamples + extraSamples - index * 2; // Still reduce for higher cascade indices
+    numSamples = max(4, numSamples); // Minimum 4 samples
+    
+    // Ultra mode gets even more samples for cascade 0-2
+    if (activeCascades >= 6 && index < 3) {
+        numSamples += 6; // Ultra boost for fine detail cascades
+    }
+    
     float minDist = pow(2.0, float(index)) + 0.01;
     float maxDist = pow(2.0, float(index + 1));
     float thickness = 0.08; // Slightly increased for more reliable hits
+    
+    // Ultra mode: higher precision raymarching
+    int numSteps = activeCascades >= 6 ? 8 : 6;
     
     // More stable world-space sampling with better distribution
     vec2 spatialSeed = worldPos.xz * 10.0 + vec2(index * 31.0, index * 67.0); // World-based seed
@@ -76,7 +90,7 @@ vec4 computeRadiance(vec2 uv, int index) {
         );
         
         vec3 worldDir = getHemisphereSample(worldNormal, rnd); // World space direction
-        float stepSize = (maxDist - minDist) / 6.0; // More steps for better quality
+        float stepSize = (maxDist - minDist) / float(numSteps); // Quality-aware step count
         float t = minDist;
         bool hit = false;
         
@@ -108,7 +122,16 @@ vec4 computeRadiance(vec2 uv, int index) {
                 
                 vec3 direct = sampleAlbedo * lightColor * diff * att;
                 float cosTerm = max(0.0, dot(worldNormal, worldDir));
-                gi += direct * cosTerm * 1.2; // Slightly reduced multiplier for balance
+                
+                // Ultra mode: Add multi-bounce approximation
+                vec3 finalRadiance = direct;
+                if (activeCascades >= 6 && index < 2) {
+                    // Approximate second bounce using albedo and average scene illumination
+                    vec3 multiBounce = sampleAlbedo * lightColor * 0.02 * att; // Barely noticeable second bounce
+                    finalRadiance += multiBounce;
+                }
+                
+                gi += finalRadiance * cosTerm * 1.0; // Reduced multiplier for better balance
                 hit = true;
                 numHits++;
                 break;
@@ -127,19 +150,35 @@ vec4 computeRadiance(vec2 uv, int index) {
     gi /= float(numSamples);
     float beta = float(numSamples - numHits) / float(numSamples);
     
-    // STRONG temporal accumulation for rock-solid stability
+    // Quality-aware temporal accumulation for stability
     if (useTemporalAccumulation) {
         vec4 temporal = texture(temporalBuffer, TexCoords);
         vec3 temporalGi = temporal.rgb;
         float temporalBeta = temporal.a;
         
         if (length(temporalGi) > 0.001) {
-            // VERY strong temporal blending for ultra-smooth GI
-            float blendFactor = 0.95; // Increased from 0.85 for maximum smoothness
+            // Ultra mode: More sophisticated temporal filtering
+            float blendFactor = 0.15; // Base blend factor
             
-            // For first few frames, use faster convergence to smooth result
-            if (frameCounter < 30) {
-                blendFactor = 0.7 + (float(frameCounter) / 30.0) * 0.25; // 0.7 -> 0.95 over 30 frames
+            if (activeCascades >= 6) {
+                // Ultra mode: More stable temporal accumulation
+                blendFactor = 0.10; // Slower accumulation for higher stability
+                
+                // Variance-based adaptive blending for Ultra mode
+                vec3 giVariance = abs(gi - temporalGi);
+                float varianceAmount = (giVariance.r + giVariance.g + giVariance.b) / 3.0;
+                if (varianceAmount > 0.1) {
+                    blendFactor = mix(0.10, 0.25, min(varianceAmount / 0.5, 1.0)); // Adapt to changes
+                }
+            } else {
+                // Standard mode: regular blending
+                blendFactor = 0.20;
+            }
+            
+            // For first few frames, use even gentler blending
+            if (frameCounter < 60) {
+                float warmupFactor = float(frameCounter) / 60.0;
+                blendFactor = mix(0.05, blendFactor, warmupFactor); // Gradual warmup
             }
             
             // Exponential moving average instead of simple mix to prevent accumulation
@@ -147,7 +186,8 @@ vec4 computeRadiance(vec2 uv, int index) {
             beta = mix(beta, temporalBeta, blendFactor);
             
             // Energy conservation - clamp to prevent infinite accumulation
-            gi = clamp(gi, vec3(0.0), vec3(2.0)); // Reasonable upper bound
+            float maxEnergy = activeCascades >= 6 ? 3.0 : 2.0; // Ultra mode allows more energy
+            gi = clamp(gi, vec3(0.0), vec3(maxEnergy));
         }
     }
     

@@ -8,15 +8,27 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 find_package(OpenGL REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
-find_package(Freetype REQUIRED)
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/imgui)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/imgui/backends)
 
 file(GLOB SOURCES "${CMAKE_SOURCE_DIR}/src/*.cpp")
 
-add_executable(vibe-gi ${SOURCES})
+# ImGui source files
+set(IMGUI_SOURCES
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_demo.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_widgets.cpp
+    third_party/imgui/backends/imgui_impl_glfw.cpp
+    third_party/imgui/backends/imgui_impl_opengl3.cpp
+)
 
-target_link_libraries(vibe-gi OpenGL::GL glfw glm::glm Freetype::Freetype)
+add_executable(vibe-gi ${SOURCES} ${IMGUI_SOURCES})
+
+target_link_libraries(vibe-gi OpenGL::GL glfw glm::glm)
 add_custom_command(TARGET vibe-gi POST_BUILD
                    COMMAND ${CMAKE_COMMAND} -E copy_directory
                    ${CMAKE_SOURCE_DIR}/shaders $<TARGET_FILE_DIR:vibe-gi>/shaders) 

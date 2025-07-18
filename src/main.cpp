@@ -29,7 +29,9 @@
  * - M: Toggle ambient lighting
  * - G: Toggle global illumination
  * - T: Toggle SSAO
-
+ * - F: Toggle screen space reflections
+ * - C: Cycle anti-aliasing (None/FXAA/TAA)
+ * - Z: Cycle quality levels
  * - R: Reset temporal accumulation
  * - Space: Pause/unpause
  * - ESC: Exit
@@ -38,6 +40,15 @@
 #include <iostream>
 #include <vector>
 #include <memory>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <queue>
+#include <future>
+#include <unordered_map>
+#include <chrono>
+#include <cfloat>
+#include <iomanip>
 
 // Core rendering components
 #include "../include/Window.h"
@@ -56,7 +67,9 @@
 // Advanced rendering features
 #include "../include/ShadowMap.h"
 #include "../include/FullscreenQuad.h"
-#include "../include/TextRenderer.h"
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
 #include "../include/RadianceCascades.h"
 
 #include <string>
@@ -67,15 +80,238 @@
 #include <OpenGL/gl3.h>
 #include <algorithm>
 
+// Enhanced performance profiler with detailed logging
+class PerformanceProfiler {
+private:
+    struct TimingData {
+        std::chrono::time_point<std::chrono::high_resolution_clock> start;
+        float lastTime = 0.0f;
+        float minTime = FLT_MAX;
+        float maxTime = 0.0f;
+        float avgTime = 0.0f;
+        int sampleCount = 0;
+        
+        void updateStats(float newTime) {
+            lastTime = newTime;
+            minTime = std::min(minTime, newTime);
+            maxTime = std::max(maxTime, newTime);
+            
+            // Rolling average
+            sampleCount++;
+            float alpha = std::min(1.0f / sampleCount, 0.1f); // Converge to 10-sample average
+            avgTime = avgTime * (1.0f - alpha) + newTime * alpha;
+        }
+    };
+    
+    std::unordered_map<std::string, TimingData> cpuTimers;
+    std::mutex timerMutex;
+    int frameCounter = 0;
+    std::chrono::time_point<std::chrono::high_resolution_clock> frameStart;
+    
+public:
+    void beginFrame() {
+        frameStart = std::chrono::high_resolution_clock::now();
+        frameCounter++;
+    }
+    
+    void beginTimer(const std::string& name) {
+        std::lock_guard<std::mutex> lock(timerMutex);
+        cpuTimers[name].start = std::chrono::high_resolution_clock::now();
+    }
+    
+    void endTimer(const std::string& name) {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::lock_guard<std::mutex> lock(timerMutex);
+        
+        auto& timer = cpuTimers[name];
+        float elapsed = std::chrono::duration<float, std::milli>(end - timer.start).count();
+        timer.updateStats(elapsed);
+    }
+    
+    void logDetailedStats() {
+        if (frameCounter % 60 == 0) { // Log every 60 frames
+            std::lock_guard<std::mutex> lock(timerMutex);
+            
+            std::cout << "\n=== PERFORMANCE BREAKDOWN (Frame " << frameCounter << ") ===" << std::endl;
+            std::cout << std::fixed << std::setprecision(2);
+            
+            // Sort by average time (highest first)
+            std::vector<std::pair<std::string, TimingData*>> sortedTimers;
+            for (auto& [name, data] : cpuTimers) {
+                sortedTimers.push_back({name, &data});
+            }
+            std::sort(sortedTimers.begin(), sortedTimers.end(), 
+                [](const auto& a, const auto& b) { return a.second->avgTime > b.second->avgTime; });
+            
+            float totalTime = 0.0f;
+            for (const auto& [name, data] : sortedTimers) {
+                totalTime += data->avgTime;
+            }
+            
+            for (const auto& [name, data] : sortedTimers) {
+                float percentage = (data->avgTime / totalTime) * 100.0f;
+                std::cout << std::setw(20) << name << ": " 
+                         << std::setw(6) << data->avgTime << "ms avg (" 
+                         << std::setw(5) << percentage << "%) [" 
+                         << std::setw(6) << data->minTime << " - " 
+                         << std::setw(6) << data->maxTime << "ms]" << std::endl;
+            }
+            
+            auto frameEnd = std::chrono::high_resolution_clock::now();
+            float frameTime = std::chrono::duration<float, std::milli>(frameEnd - frameStart).count();
+            std::cout << std::setw(20) << "TOTAL_FRAME" << ": " 
+                     << std::setw(6) << frameTime << "ms" << std::endl;
+            std::cout << std::setw(20) << "TARGET_60FPS" << ": " 
+                     << std::setw(6) << "16.67ms (current: " << (1000.0f / frameTime) << " fps)" << std::endl;
+            std::cout << "========================================\n" << std::endl;
+        }
+    }
+    
+    float getLastTime(const std::string& name) {
+        std::lock_guard<std::mutex> lock(timerMutex);
+        auto it = cpuTimers.find(name);
+        return (it != cpuTimers.end()) ? it->second.lastTime : 0.0f;
+    }
+};
+
+// Input processing thread data
+struct InputData {
+    std::atomic<bool> moveForward{false};
+    std::atomic<bool> moveBackward{false};
+    std::atomic<bool> moveLeft{false};
+    std::atomic<bool> moveRight{false};
+    std::atomic<bool> ambientToggle{false};
+    std::atomic<bool> giToggle{false};
+    std::atomic<bool> ssaoToggle{false};
+    std::atomic<bool> qualityToggle{false};
+    std::atomic<bool> resetTemporal{false};
+    std::atomic<bool> pauseToggle{false};
+    std::atomic<bool> exitRequested{false};
+    std::atomic<bool> ssrToggle{false};        // F key - toggle SSR
+    std::atomic<bool> antiAliasingToggle{false}; // C key - cycle AA modes
+    
+    // Light controls
+    std::atomic<float> lightMoveX{0.0f};
+    std::atomic<float> lightMoveZ{0.0f};
+    std::atomic<float> lightMoveY{0.0f};
+    std::atomic<float> lightIntensityDelta{0.0f};
+    std::atomic<float> lightRadiusDelta{0.0f};
+    
+    std::mutex mouseMutex;
+    double mouseX = 0.0, mouseY = 0.0;
+    bool mouseUpdated = false;
+};
+
+// Simplified performance monitoring
+struct PerformanceData {
+    std::atomic<int> fps{0};
+    std::atomic<float> frameTime{0.0f};
+    std::atomic<float> shadowTime{0.0f};
+    std::atomic<float> gbufferTime{0.0f};
+    std::atomic<float> ssaoTime{0.0f};
+    std::atomic<float> giTime{0.0f};
+    std::atomic<float> compositeTime{0.0f};
+    std::atomic<float> uiTime{0.0f};
+    std::atomic<bool> giEnabled{true};
+    std::atomic<bool> ssaoEnabled{false};
+    std::atomic<int> qualityLevel{2};
+    
+    std::mutex textMutex;
+    bool textReady = true;
+};
+
 // Function prototypes
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
-void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCascades& rc, float deltaTime, bool& ambientEnabled, bool& giEnabled, bool& ssaoEnabled, bool& paused, float& pausedTime, int& qualityLevel, bool& quickPerformanceMode);
+void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCascades& rc, float deltaTime, bool& ambientEnabled, bool& giEnabled, bool& ssaoEnabled, bool& paused, float& pausedTime, int& qualityLevel);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
+
+// Multithreading function prototypes
+void inputProcessingThread(GLFWwindow* window, InputData& inputData, std::atomic<bool>& running);
+void performanceMonitoringThread(PerformanceData& perfData, std::atomic<bool>& running);
 
 // Global variables for mouse input handling
 bool firstMouse = true;
 float lastX = 1280.0f / 2.0;
 float lastY = 800.0f / 2.0;
+
+// Asynchronous input processing thread function
+void inputProcessingThread(GLFWwindow* window, InputData& inputData, std::atomic<bool>& running) {
+    while (running) {
+        // Reset movement states each frame
+        inputData.moveForward = glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
+        inputData.moveBackward = glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
+        inputData.moveLeft = glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS;
+        inputData.moveRight = glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS;
+        inputData.exitRequested = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+        
+        // Light movement controls - accumulate over time
+        float lightSpeed = 0.05f; // Reduced for smoother control
+        inputData.lightMoveX = 0.0f;
+        inputData.lightMoveZ = 0.0f;
+        inputData.lightMoveY = 0.0f;
+        inputData.lightIntensityDelta = 0.0f;
+        inputData.lightRadiusDelta = 0.0f;
+        
+        if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) inputData.lightMoveX = -lightSpeed;
+        if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) inputData.lightMoveX = lightSpeed;
+        if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) inputData.lightMoveZ = -lightSpeed;
+        if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) inputData.lightMoveZ = lightSpeed;
+        if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) inputData.lightMoveY = lightSpeed;
+        if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) inputData.lightMoveY = -lightSpeed;
+        if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) inputData.lightIntensityDelta = lightSpeed;
+        if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) inputData.lightIntensityDelta = -lightSpeed;
+        if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) inputData.lightRadiusDelta = lightSpeed;
+        if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) inputData.lightRadiusDelta = -lightSpeed;
+        
+        // Toggle states (handled with static debouncing)
+        static bool lastM = false, lastG = false, lastT = false, lastZ = false, lastR = false, lastSpace = false, lastF = false, lastC = false;
+        
+        bool currentM = glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS;
+        if (!lastM && currentM) inputData.ambientToggle = true;
+        lastM = currentM;
+        
+        bool currentG = glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS;
+        if (!lastG && currentG) inputData.giToggle = true;
+        lastG = currentG;
+        
+        bool currentT = glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS;
+        if (!lastT && currentT) inputData.ssaoToggle = true;
+        lastT = currentT;
+        
+        bool currentZ = glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS;
+        if (!lastZ && currentZ) inputData.qualityToggle = true;
+        lastZ = currentZ;
+        
+        bool currentR = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
+        if (!lastR && currentR) inputData.resetTemporal = true;
+        lastR = currentR;
+        
+        bool currentSpace = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+        if (!lastSpace && currentSpace) inputData.pauseToggle = true;
+        lastSpace = currentSpace;
+        
+        bool currentF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
+        if (!lastF && currentF) inputData.ssrToggle = true;
+        lastF = currentF;
+        
+        bool currentC = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
+        if (!lastC && currentC) inputData.antiAliasingToggle = true;
+        lastC = currentC;
+        
+        // Run at 120 Hz for responsive input
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    }
+}
+
+// Simplified performance monitoring thread (reduced overhead after fixing UI bottleneck)
+void performanceMonitoringThread(PerformanceData& perfData, std::atomic<bool>& running) {
+    while (running) {
+        // Just keep the data updated - UI rendering is now optimized
+        
+        // Run at lower frequency since UI is now optimized
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
 
 /**
  * Main rendering loop and application entry point
@@ -84,6 +320,15 @@ float lastY = 800.0f / 2.0;
  * and runs the main game loop with real-time global illumination.
  */
 int main() {
+    // Multithreading setup (declared outside try block for proper cleanup)
+    InputData inputData;
+    std::atomic<bool> inputThreadRunning{false};
+    std::thread inputThread;
+    
+    PerformanceData perfData;
+    std::atomic<bool> perfThreadRunning{false};
+    std::thread perfThread;
+    
     try {
         // Initialize main window with OpenGL context
         Window window(1280, 800, "Vibe-GI: Global Illumination Renderer");
@@ -107,14 +352,25 @@ int main() {
         Shader copyShader("shaders/fullscreen.vert", "shaders/copy.frag");               // Direct copy (no AA)
         Shader ssaoShader("shaders/fullscreen.vert", "shaders/ssao.frag");                // Screen-space ambient occlusion
         Shader ssaoBlurShader("shaders/fullscreen.vert", "shaders/ssao_blur.frag");       // SSAO blur for noise reduction
-        Shader textShader("shaders/text.vert", "shaders/text.frag");                      // UI text rendering
+        Shader ssrShader("shaders/fullscreen.vert", "shaders/ssr.frag");                  // Screen-space reflections
+        Shader taaShader("shaders/fullscreen.vert", "shaders/taa.frag");                  // Temporal anti-aliasing
+        Shader fxaaShader("shaders/fullscreen.vert", "shaders/fxaa.frag");                // Fast approximate anti-aliasing
+        // Initialize ImGui for ultra-fast UI rendering
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         
-        // Initialize text rendering system for debug UI
-        TextRenderer textRenderer("fonts/OpenSans-Regular.ttf", 24, &textShader);
+        // Setup ImGui style
+        ImGui::StyleColorsDark();
+        
+        // Setup Platform/Renderer backends
+        ImGui_ImplGlfw_InitForOpenGL(window.getGLFWWindow(), true);
+        ImGui_ImplOpenGL3_Init("#version 330");
 
         // Initialize core rendering systems
         ShadowMap shadowMap;                                    // Directional light shadow mapping
-        RadianceCascades rc(1280, 800, 4);                     // 4-cascade radiance cascade GI system (optimized)
+        RadianceCascades rc(1280, 800, 6);                     // 6-cascade radiance cascade GI system (high quality)
         FullscreenQuad quad;                                    // Fullscreen quad for post-processing
 
         // Create offscreen framebuffer for composite pass (before TAA)
@@ -142,11 +398,12 @@ int main() {
         glfwSetWindowUserPointer(window.getGLFWWindow(), &scene.camera);
 
         // Timing and performance tracking variables
-        bool ambientEnabled = true;     // Toggle for ambient lighting
+        bool ambientEnabled = false;    // Toggle for ambient lighting (default off)
         bool giEnabled = true;          // Toggle for global illumination
         bool ssaoEnabled = true;        // Toggle for screen space ambient occlusion
-        int qualityLevel = 1;           // Quality level: 0=performance, 1=balanced, 2=quality
-        bool quickPerformanceMode = false; // Quick performance toggle
+        bool ssrEnabled = false;        // Toggle for screen space reflections
+        int antiAliasingMode = 0;       // AA mode: 0=none, 1=FXAA, 2=TAA
+        int qualityLevel = 2;           // Quality level: 0=super low, 1=performance, 2=balanced, 3=high, 4=ultra
 
         float deltaTime = 0.0f;         // Frame time delta
         float lastFrame = 0.0f;         // Previous frame timestamp
@@ -158,6 +415,25 @@ int main() {
         static int lastWidth = 0;       // Previous frame width (for resize detection)
         static int lastHeight = 0;      // Previous frame height (for resize detection)
 
+        // Enhanced performance profiler
+        PerformanceProfiler profiler;
+        
+        // Start input processing thread
+        inputThreadRunning = true;
+        inputThread = std::thread(inputProcessingThread, window.getGLFWWindow(), std::ref(inputData), std::ref(inputThreadRunning));
+        
+        // Start performance monitoring thread
+        perfThreadRunning = true;
+        perfThread = std::thread(performanceMonitoringThread, std::ref(perfData), std::ref(perfThreadRunning));
+        
+        // Performance monitoring (updated async from GPU)
+        float frameTime = 0.0f;
+        float shadowTime = 0.0f;
+        float gbufferTime = 0.0f;
+        float ssaoTime = 0.0f;
+        float giTime = 0.0f;
+        float compositeTime = 0.0f;
+
         /**
          * MAIN RENDER LOOP
          * 
@@ -165,6 +441,10 @@ int main() {
          * global illumination, running at interactive frame rates.
          */
         while (!window.shouldClose()) {
+            // Begin detailed frame profiling
+            profiler.beginFrame();
+            
+            profiler.beginTimer("frame_setup");
             // Calculate frame timing for smooth animation and movement
             float currentFrame = glfwGetTime();
             deltaTime = currentFrame - lastFrame;
@@ -175,13 +455,109 @@ int main() {
             fpsTimer += deltaTime;
             if (fpsTimer >= 1.0f) {
                 fps = static_cast<int>(frameCount / fpsTimer);
+                perfData.fps = fps; // Feed to performance thread
                 frameCount = 0;
                 fpsTimer -= 1.0f;
             }
+            profiler.endTimer("frame_setup");
+            
+            // UI cache variables - accessible from both input handling and UI rendering
+            static int uiFrameCounter = 0;
+            static std::string cachedFpsText = "FPS: 0";
+            static std::string cachedQualityText = "Quality: Balanced (3C)";
+            static std::string cachedGiStatusText = "GI: ON";
+            static std::string cachedSsaoStatusText = "SSAO: ON";
+            static std::string cachedSsrStatusText = "SSR: OFF";
+            static std::string cachedAaStatusText = "AA: None";
+            uiFrameCounter++;
+            
+            profiler.beginTimer("input_processing");
+            // Process input from async thread
+            if (inputData.exitRequested) {
+                glfwSetWindowShouldClose(window.getGLFWWindow(), true);
+            }
+            
+            // Handle toggle states
+            if (inputData.ambientToggle.exchange(false)) {
+                ambientEnabled = !ambientEnabled;
+            }
+            if (inputData.giToggle.exchange(false)) {
+                giEnabled = !giEnabled;
+                perfData.giEnabled = giEnabled; // Update performance thread
+                
+                // Immediately update UI cache for responsive feedback
+                cachedGiStatusText = "GI: " + std::string(giEnabled ? "ON" : "OFF");
+            }
+            if (inputData.ssaoToggle.exchange(false)) {
+                ssaoEnabled = !ssaoEnabled;
+                perfData.ssaoEnabled = ssaoEnabled; // Update performance thread
+                
+                // Immediately update UI cache for responsive feedback
+                cachedSsaoStatusText = "SSAO: " + std::string(ssaoEnabled ? "ON" : "OFF");
+            }
+            if (inputData.qualityToggle.exchange(false)) {
+                qualityLevel = (qualityLevel + 1) % 5; // 5 quality levels: 0-4
+                perfData.qualityLevel = qualityLevel; // Update performance thread
+                
+                // Immediately update UI cache for responsive feedback
+                std::string qualityNames[] = {"Super Low", "Performance", "Balanced", "High", "Ultra"};
+                std::string cascadeCounts[] = {"2C", "3C", "4C", "5C", "6C"};
+                cachedQualityText = "Quality: " + qualityNames[qualityLevel] + " (" + cascadeCounts[qualityLevel] + ")";
+            }
 
-            // Process user input (camera movement, light controls, toggles)
-            processInput(window.getGLFWWindow(), scene.camera, scene, rc, deltaTime, ambientEnabled, giEnabled, ssaoEnabled, paused, pausedTime, qualityLevel, quickPerformanceMode);
+            if (inputData.resetTemporal.exchange(false)) {
+                rc.resetTemporalAccumulation();
+            }
+            if (inputData.pauseToggle.exchange(false)) {
+                paused = !paused;
+                if (paused) {
+                    pausedTime = glfwGetTime();
+                    glfwSetInputMode(window.getGLFWWindow(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                } else {
+                    glfwSetInputMode(window.getGLFWWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                }
+            }
+            if (inputData.ssrToggle.exchange(false)) {
+                ssrEnabled = !ssrEnabled;
+                cachedSsrStatusText = "SSR: " + std::string(ssrEnabled ? "ON" : "OFF");
+            }
+            if (inputData.antiAliasingToggle.exchange(false)) {
+                antiAliasingMode = (antiAliasingMode + 1) % 3; // Cycle: None -> FXAA -> TAA -> None
+                std::string aaNames[] = {"None", "FXAA", "TAA"};
+                cachedAaStatusText = "AA: " + aaNames[antiAliasingMode];
+            }
+            
+            // Process camera movement (only when not paused)
+            if (!paused) {
+                if (inputData.moveForward) scene.camera.processKeyboard(0, deltaTime);
+                if (inputData.moveBackward) scene.camera.processKeyboard(1, deltaTime);
+                if (inputData.moveLeft) scene.camera.processKeyboard(2, deltaTime);
+                if (inputData.moveRight) scene.camera.processKeyboard(3, deltaTime);
+            }
 
+            // Process light controls from async input (only when not paused)
+            if (!paused) {
+                for (const auto& entity : scene.entities) {
+                    if (auto light = entity->getComponent<LightComponent>()) {
+                        if (auto transform = entity->getComponent<TransformComponent>()) {
+                            // Apply light movement from async input
+                            transform->position.x += inputData.lightMoveX * deltaTime * 60.0f; // Scale by frame rate
+                            transform->position.z += inputData.lightMoveZ * deltaTime * 60.0f;
+                            transform->position.y += inputData.lightMoveY * deltaTime * 60.0f;
+                            
+                            // Apply light property changes
+                            light->intensity += inputData.lightIntensityDelta * deltaTime * 60.0f;
+                            light->intensity = std::max(0.0f, light->intensity);
+                            
+                            light->radius += inputData.lightRadiusDelta * deltaTime * 60.0f;
+                            light->radius = std::max(0.5f, light->radius);
+                        }
+                    }
+                }
+            }
+            profiler.endTimer("input_processing");
+            
+            profiler.beginTimer("scene_setup");
             // Extract light information from ECS for rendering
             // In a real engine, this would support multiple lights
             glm::vec3 lightPos(0.0f);
@@ -198,6 +574,15 @@ int main() {
                         lightRadius = light->radius;
                     }
                 }
+            }
+            
+            // Reset temporal accumulation if camera moved significantly
+            // This prevents ghosting artifacts when camera moves
+            static glm::vec3 lastCameraPos(0.0f);
+            float cameraMovement = glm::length(scene.camera.position - lastCameraPos);
+            if (cameraMovement > 0.01f) { // Very sensitive threshold for camera movement
+                rc.resetTemporalAccumulation();
+                lastCameraPos = scene.camera.position;
             }
             
             // Reset temporal accumulation if light moved significantly
@@ -235,16 +620,25 @@ int main() {
 
             // Poll window events (input, resize, etc.)
             window.pollEvents();
+            profiler.endTimer("scene_setup");
 
             /**
              * RENDERING PIPELINE - Multi-pass deferred rendering with global illumination
              */
 
+            profiler.beginTimer("rendering_pipeline");
+            auto passStart = std::chrono::high_resolution_clock::now();
+
             // PASS 1: SHADOW MAP GENERATION
             // Render scene from light's perspective to generate shadow map
+            profiler.beginTimer("shadow_total");
+            profiler.beginTimer("shadow_setup");
             shadowShader.use();
             shadowShader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
             shadowMap.bindForWriting();
+            profiler.endTimer("shadow_setup");
+            
+            profiler.beginTimer("shadow_render");
             for (const auto& entity : scene.entities) {
                 auto meshComp = entity->getComponent<MeshComponent>();
                 if (meshComp) {
@@ -255,9 +649,17 @@ int main() {
                     }
                 }
             }
+            profiler.endTimer("shadow_render");
+            profiler.endTimer("shadow_total");
+            
+            shadowTime = profiler.getLastTime("shadow_total");
+            perfData.shadowTime = shadowTime; // Feed to performance thread
 
             // PASS 2: G-BUFFER GENERATION (Deferred Rendering)
             // Render geometry data (position, normal, albedo, motion vectors) to textures
+            profiler.beginTimer("gbuffer_total");
+            profiler.beginTimer("gbuffer_setup");
+            
             rc.bindGBufferForWriting();
             gBufferShader.use();
             gBufferShader.setMat4("projection", projection);
@@ -266,8 +668,10 @@ int main() {
             gBufferShader.setMat4("previousView", previousView);
             glViewport(0, 0, width, height);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            profiler.endTimer("gbuffer_setup");
 
             // Render all scene geometry to G-buffer
+            profiler.beginTimer("gbuffer_render");
             for (const auto& entity : scene.entities) {
                 auto meshComp = entity->getComponent<MeshComponent>();
                 auto transformComp = entity->getComponent<TransformComponent>();
@@ -294,44 +698,110 @@ int main() {
                     }
                 }
             }
+            profiler.endTimer("gbuffer_render");
+            profiler.endTimer("gbuffer_total");
+            
+            gbufferTime = profiler.getLastTime("gbuffer_total");
+            perfData.gbufferTime = gbufferTime; // Feed to performance thread
             
             // PASS 3: SCREEN SPACE AMBIENT OCCLUSION (SSAO)
             // Compute ambient occlusion for enhanced depth perception (if enabled)
-            // Skip SSAO in quick performance mode or performance quality level
-            if (ssaoEnabled && !quickPerformanceMode && qualityLevel > 0) {
+            // Quality-dependent SSAO: disabled for super low, enabled for others
+            profiler.beginTimer("ssao_total");
+            
+            if (ssaoEnabled && qualityLevel > 0) {
+                profiler.beginTimer("ssao_compute");
                 rc.computeSSAO(ssaoShader, projection);
+                profiler.endTimer("ssao_compute");
                 
                 // PASS 4: SSAO BLUR
-                // Smooth the SSAO to reduce noise while preserving detail
-                rc.blurSSAO(ssaoBlurShader);
+                // Quality-dependent blur: skip for performance level, full for others
+                profiler.beginTimer("ssao_blur");
+                if (qualityLevel > 1) {
+                    rc.blurSSAO(ssaoBlurShader);
+                }
+                profiler.endTimer("ssao_blur");
             }
+            profiler.endTimer("ssao_total");
             
-            // Determine cascade count based on quality level - move outside GI check for consistency
-            int activeCascades = (giEnabled && !quickPerformanceMode) ? 
-                (qualityLevel == 0 ? 3 : qualityLevel == 1 ? 3 : 4) : 0;  // Changed performance to 3 cascades to fix oversaturation
+            ssaoTime = profiler.getLastTime("ssao_total");
+            perfData.ssaoTime = ssaoTime; // Feed to performance thread
+            
+            // 5-Level Quality System with increased cascade counts for high-end hardware
+            // Super Low (0): 2 cascades,  minimal GI but still good quality
+            // Performance (1): 3 cascades, good GI quality with performance focus
+            // Balanced (2): 4 cascades, excellent balance of quality/performance  
+            // High (3): 5 cascades, high quality GI for detailed scenes
+            // Ultra (4): 6 cascades, maximum quality GI for ultimate fidelity
+            int activeCascades = 0;
+            if (giEnabled) {
+                switch (qualityLevel) {
+                    case 0: activeCascades = 2; break; // Super Low
+                    case 1: activeCascades = 3; break; // Performance  
+                    case 2: activeCascades = 4; break; // Balanced
+                    case 3: activeCascades = 5; break; // High
+                    case 4: activeCascades = 6; break; // Ultra (maximum quality)
+                    default: activeCascades = 4; break; // Fallback
+                }
+            }
             // Clamp to valid range for safety
-            activeCascades = std::max(0, std::min(activeCascades, 4));
+            activeCascades = std::max(0, std::min(activeCascades, 6));
             
             // PASS 5: RADIANCE CASCADES GLOBAL ILLUMINATION
             // Compute multi-bounce indirect lighting using radiance cascades
-            // Disable in quick performance mode
-            if (giEnabled && !quickPerformanceMode) {
+            profiler.beginTimer("gi_total");
+            
+            if (giEnabled) {
+                profiler.beginTimer("gi_setup");
                 rcShader.use();
                 rcShader.setMat4("invView", glm::inverse(view)); // For world space calculations
                 rcShader.setVec3("lightPos", lightPos);          // World space light position
                 rcShader.setVec3("lightColor", lightColor);      // Light color and intensity
                 rcShader.setFloat("lightRadius", lightRadius);   // Light attenuation radius
                 rcShader.setFloat("time", glfwGetTime());         // Time for temporal effects
-                rcShader.setInt("activeCascades", activeCascades); // Dynamic cascade count
-                rc.compute(rcShader, view, projection, activeCascades);
+                rcShader.setInt("activeCascades", activeCascades); // Dynamic cascade count for quality-aware computation
+                profiler.endTimer("gi_setup");
                 
-                // PASS 6: GI TEMPORAL BLUR
-                // Apply blur to GI for temporal stability and noise reduction
-                rc.blur(blurShader, activeCascades);
+                profiler.beginTimer("gi_compute");
+                rc.compute(rcShader, view, projection, activeCascades);
+                profiler.endTimer("gi_compute");
+                
+                // PASS 6: GI QUALITY-DEPENDENT BLUR
+                // Apply blur based on quality level for optimal performance/quality balance
+                profiler.beginTimer("gi_blur");
+                switch (qualityLevel) {
+                    case 0: // Super Low: minimal blur for performance
+                        // Skip blur entirely for maximum performance
+                        break;
+                    case 1: // Performance: reduced blur (only blur first 2 cascades)
+                        if (activeCascades >= 2) {
+                            rc.blur(blurShader, 2); // Only blur first 2 cascades for performance
+                        } else {
+                            rc.blur(blurShader, activeCascades);
+                        }
+                        break;
+                    case 2: // Balanced: standard blur
+                        rc.blur(blurShader, activeCascades);
+                        break;
+                    case 3: // High: enhanced blur
+                        rc.blur(blurShader, activeCascades);
+                        break;
+                    case 4: // Ultra: maximum quality blur (could be multi-pass in future)
+                        rc.blur(blurShader, activeCascades);
+                        break;
+                }
+                profiler.endTimer("gi_blur");
             }
+            profiler.endTimer("gi_total");
+            
+            giTime = profiler.getLastTime("gi_total");
+            perfData.giTime = giTime; // Feed to performance thread
             
             // PASS 7: FINAL COMPOSITE TO OFFSCREEN BUFFER
             // Combine all lighting contributions into final image
+            profiler.beginTimer("composite_total");
+            profiler.beginTimer("composite_setup");
+            
             glBindFramebuffer(GL_FRAMEBUFFER, compositeFBO);
             glViewport(0, 0, width, height);
 
@@ -346,14 +816,23 @@ int main() {
             compositeShader.setVec3("lightColor", lightColor);
             compositeShader.setVec3("viewPos", scene.camera.position);
             compositeShader.setFloat("lightRadius", lightRadius);
-            // Adjust GI strength: performance mode gets reduced strength to prevent oversaturation
+            // CORRECTED GI strength: More cascades capture more light, so need LOWER multipliers for visual consistency
+            // Ultra mode has additional enhancements (multi-bounce, better upsampling) so needs even lower strength
             float giStrength = 0.0f;
-            if (giEnabled && !quickPerformanceMode) {
-                giStrength = (qualityLevel == 0) ? 0.8f : 1.2f;  // Lower strength for performance mode
+            if (giEnabled) {
+                switch (qualityLevel) {
+                    case 0: giStrength = 0.85f; break; // Super Low (2C): highest strength since fewer cascades
+                    case 1: giStrength = 0.70f; break; // Performance (3C): reduced strength for extra cascade
+                    case 2: giStrength = 0.55f; break; // Balanced (4C): balanced strength for good coverage
+                    case 3: giStrength = 0.45f; break; // High (5C): this looks good - keep as reference
+                    case 4: giStrength = 0.82f; break; // Ultra (6C): increased to match High's effective brightness (0.82 × 0.22 = 0.18)
+                    default: giStrength = 0.55f; break; // Fallback to balanced
+                }
             }
             compositeShader.setFloat("ssgiStrength", giStrength);
-            compositeShader.setFloat("ambientStrength", ambientEnabled ? 0.15f : 0.0f);
-            compositeShader.setFloat("ssaoStrength", (ssaoEnabled && !quickPerformanceMode && qualityLevel > 0) ? 1.0f : 0.0f); // Conditional SSAO contribution
+            compositeShader.setFloat("ambientStrength", ambientEnabled ? 0.08f : 0.0f); // Reduced ambient
+            compositeShader.setFloat("ssaoStrength", (ssaoEnabled && qualityLevel > 0) ? 1.0f : 0.0f); // Conditional SSAO contribution
+            compositeShader.setInt("activeCascades", activeCascades); // Pass cascade count for quality-aware processing
             
             // Bind all G-buffer textures for lighting calculations
             compositeShader.setInt("gPosition", 0);
@@ -371,8 +850,10 @@ int main() {
                 compositeShader.setInt("rcTexture[" + std::to_string(i) + "]", 0); // Bind to position texture as safe fallback
             }
             compositeShader.setInt("activeCascades", activeCascades);
+            profiler.endTimer("composite_setup");
             
             // Activate and bind all required textures
+            profiler.beginTimer("composite_textures");
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, rc.getGPosition());
             glActiveTexture(GL_TEXTURE1);
@@ -397,13 +878,45 @@ int main() {
                 glBindTexture(GL_TEXTURE_2D, rc.getGPosition()); // Safe fallback texture
             }
 
+            profiler.endTimer("composite_textures");
+
             // Render fullscreen quad to perform lighting calculations
+            profiler.beginTimer("composite_render");
             quad.render();
+            profiler.endTimer("composite_render");
+            profiler.endTimer("composite_total");
+            
+            compositeTime = profiler.getLastTime("composite_total");
+            perfData.compositeTime = compositeTime; // Feed to performance thread
             
             glEnable(GL_DEPTH_TEST);
 
-            // PASS 8: FINAL OUTPUT TO SCREEN
-            // Direct copy to screen - simple and fast
+            // PASS 8: SCREEN SPACE REFLECTIONS (Optional)
+            if (ssrEnabled) {
+                profiler.beginTimer("ssr_total");
+                rc.computeSSR(ssrShader, compositeTexture, view, projection, scene.camera.position);
+                profiler.endTimer("ssr_total");
+            }
+
+            // PASS 9: ANTI-ALIASING (Optional)
+            unsigned int finalTexture = compositeTexture;
+            
+            if (antiAliasingMode == 1) { // FXAA
+                profiler.beginTimer("fxaa_total");
+                rc.applyFXAA(fxaaShader, finalTexture);
+                finalTexture = rc.getTAATexture(); // Reuse TAA texture for FXAA output
+                profiler.endTimer("fxaa_total");
+            } else if (antiAliasingMode == 2) { // TAA
+                profiler.beginTimer("taa_total");
+                glm::mat4 currentViewProj = projection * view;
+                static glm::mat4 previousViewProj = currentViewProj;
+                rc.applyTAA(taaShader, finalTexture, currentViewProj, previousViewProj);
+                finalTexture = rc.getTAATexture();
+                previousViewProj = currentViewProj;
+                profiler.endTimer("taa_total");
+            }
+
+            // PASS 10: FINAL OUTPUT TO SCREEN
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glDisable(GL_DEPTH_TEST);
@@ -412,56 +925,136 @@ int main() {
             copyShader.setInt("inputTexture", 0);
 
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, compositeTexture);
+            glBindTexture(GL_TEXTURE_2D, finalTexture);
 
             quad.render();
 
             glEnable(GL_DEPTH_TEST);
 
-            // PASS 9: DEBUG UI RENDERING
-            // Render performance metrics and control information
-            if (true) { // Debug info always enabled for now
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glDisable(GL_DEPTH_TEST);
-                glm::mat4 ortho = glm::ortho(0.0f, static_cast<float>(width), 0.0f, static_cast<float>(height));
-                
-                // Render UI text (positioned at bottom left per user preference [[memory:3304406]])
-                textRenderer.RenderText("Vibe-GI: Real-time Global Illumination", 25.0f, 200.0f, 0.7f, glm::vec3(0.0, 1.0, 0.0), ortho);
-                textRenderer.RenderText("WASD: Move camera", 25.0f, 170.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
-                textRenderer.RenderText("Mouse: Look around", 25.0f, 150.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
-                textRenderer.RenderText("M: Toggle Ambient, G: Toggle GI, T: Toggle SSAO", 25.0f, 130.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
-                textRenderer.RenderText("Z: Quality Level, Q: Quick Performance Mode", 25.0f, 110.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
-                textRenderer.RenderText("Arrow Keys: Move Light, K/L: Height", 25.0f, 90.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
-                textRenderer.RenderText("O/P: Light Intensity, I/U: Light Radius", 25.0f, 70.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
-                std::string fpsText = "FPS: " + std::to_string(fps);
-                textRenderer.RenderText(fpsText, 25.0f, 50.0f, 0.5f, glm::vec3(1.0, 1.0, 1.0), ortho);
-                std::string giStatusText = "GI: " + std::string(giEnabled ? "ON" : "OFF");
-                textRenderer.RenderText(giStatusText, 200.0f, 50.0f, 0.5f, giEnabled ? glm::vec3(0.0, 1.0, 0.0) : glm::vec3(1.0, 0.0, 0.0), ortho);
-                std::string ssaoStatusText = "SSAO: " + std::string(ssaoEnabled ? "ON" : "OFF");
-                textRenderer.RenderText(ssaoStatusText, 280.0f, 50.0f, 0.5f, ssaoEnabled ? glm::vec3(0.0, 1.0, 0.0) : glm::vec3(1.0, 0.0, 0.0), ortho);
-                
-                // Quality and performance status
-                std::string qualityText = "Quality: " + (qualityLevel == 0 ? std::string("Performance (3C)") : qualityLevel == 1 ? std::string("Balanced (3C)") : std::string("High (4C)"));
-                textRenderer.RenderText(qualityText, 380.0f, 50.0f, 0.5f, glm::vec3(1.0, 1.0, 0.0), ortho);
-                if (quickPerformanceMode) {
-                    textRenderer.RenderText("QUICK PERF MODE", 25.0f, 30.0f, 0.5f, glm::vec3(1.0, 0.5, 0.0), ortho);
-                }
-
-                glDisable(GL_BLEND);
-                glEnable(GL_DEPTH_TEST);
+            // PASS 9: FULLY STABLE UI RENDERING (NO FLICKERING)
+            // All text always visible, with cached strings updated at different frequencies
+            profiler.beginTimer("ui_total");
+            
+            profiler.beginTimer("ui_setup");
+            // Start the Dear ImGui frame
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+            profiler.endTimer("ui_setup");
+            
+            // PROBE 1: Update FPS every 3 frames (high frequency for responsiveness)
+            profiler.beginTimer("ui_cache_update");
+            if (uiFrameCounter % 3 == 0) {
+                cachedFpsText = "FPS: " + std::to_string(fps);
             }
+            
+            // PROBE 2: Update quality status every 6 frames (medium frequency)
+            if (uiFrameCounter % 6 == 0) {
+                std::string qualityNames[] = {"Super Low", "Performance", "Balanced", "High", "Ultra"};
+                std::string cascadeCounts[] = {"2C", "3C", "4C", "5C", "6C"};
+                cachedQualityText = "Quality: " + qualityNames[qualityLevel] + " (" + cascadeCounts[qualityLevel] + ")";
+                cachedGiStatusText = "GI: " + std::string(giEnabled ? "ON" : "OFF");
+                cachedSsaoStatusText = "SSAO: " + std::string(ssaoEnabled ? "ON" : "OFF");
+            }
+            profiler.endTimer("ui_cache_update");
+            
+            // Ultra-fast ImGui UI rendering
+            profiler.beginTimer("ui_render");
+            
+            // Create main info overlay window
+            ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.7f); // Transparent background
+            if (ImGui::Begin("Vibe-GI Info", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
+            {
+                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Vibe-GI: Real-time Global Illumination");
+                ImGui::Separator();
+                
+                ImGui::Text("WASD: Move camera");
+                ImGui::Text("Mouse: Look around");
+                ImGui::Text("M: Toggle Ambient, G: Toggle GI, T: Toggle SSAO");
+                ImGui::Text("F: Toggle SSR, C: Cycle AA (None/FXAA/TAA)");
+                ImGui::Text("Z: Quality Level (5 levels)");
+                ImGui::Text("Arrow Keys: Move Light, K/L: Height");
+                ImGui::Text("O/P: Light Intensity, I/U: Light Radius");
+                
+                ImGui::Separator();
+                
+                // Status line with cached values
+                ImGui::Text("%s", cachedFpsText.c_str());
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "%s", cachedQualityText.c_str());
+                ImGui::SameLine();
+                ImGui::TextColored(giEnabled ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", cachedGiStatusText.c_str());
+                ImGui::SameLine();
+                ImGui::TextColored(ssaoEnabled ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", cachedSsaoStatusText.c_str());
+                ImGui::TextColored(ssrEnabled ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", cachedSsrStatusText.c_str());
+                ImGui::TextColored(antiAliasingMode > 0 ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s", cachedAaStatusText.c_str());
+            }
+            ImGui::End();
+            profiler.endTimer("ui_render");
+
+            profiler.beginTimer("ui_cleanup");
+            // Render ImGui
+            ImGui::Render();
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+            profiler.endTimer("ui_cleanup");
+            profiler.endTimer("ui_total");
+            
+            // Store UI timing for performance monitoring
+            float uiTime = profiler.getLastTime("ui_total");
+            perfData.uiTime = uiTime; // Feed to performance thread
 
             // Store matrices for next frame
             previousView = view;
             previousProjection = projection;
 
             // Present final frame to screen
+            profiler.beginTimer("buffer_swap");
             window.swapBuffers();
+            profiler.endTimer("buffer_swap");
+            
+            profiler.endTimer("rendering_pipeline");
+            
+            // Calculate total frame time and log detailed statistics
+            auto frameEnd = std::chrono::high_resolution_clock::now();
+            frameTime = std::chrono::duration<float, std::milli>(frameEnd - passStart).count();
+            perfData.frameTime = frameTime; // Feed to performance thread
+            
+            // Log detailed performance breakdown every 60 frames
+            profiler.logDetailedStats();
         }
+
+        // Clean up multithreading resources
+        inputThreadRunning = false;
+        inputThread.join();
+        perfThreadRunning = false;
+        if (perfThread.joinable()) {
+            perfThread.join();
+        }
+
+        // Cleanup ImGui
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
 
     } catch (const std::exception& e) {
         std::cerr << "Fatal error: " << e.what() << std::endl;
+        
+        // Ensure threads are cleaned up even on error
+        inputThreadRunning = false;
+        if (inputThread.joinable()) {
+            inputThread.join();
+        }
+        perfThreadRunning = false;
+        if (perfThread.joinable()) {
+            perfThread.join();
+        }
+        
+        // Cleanup ImGui even on error
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        
         return -1;
     }
 
@@ -494,7 +1087,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
  * @param paused        Reference to pause state
  * @param pausedTime    Time when pause was activated
  */
-void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCascades& rc, float deltaTime, bool& ambientEnabled, bool& giEnabled, bool& ssaoEnabled, bool& paused, float& pausedTime, int& qualityLevel, bool& quickPerformanceMode) {
+void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCascades& rc, float deltaTime, bool& ambientEnabled, bool& giEnabled, bool& ssaoEnabled, bool& paused, float& pausedTime, int& qualityLevel) {
     // Toggle ambient lighting with M key
     static bool lastM = false;
     bool currentM = glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS;
@@ -519,21 +1112,13 @@ void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCasc
     }
     lastT = currentT;
     
-    // Toggle quality level with Z key (cycles: Performance -> Balanced -> Quality)
+    // Toggle quality level with Z key (cycles: Super Low -> Performance -> Balanced -> High -> Ultra)
     static bool lastZ = false;
     bool currentZ = glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS;
     if (!lastZ && currentZ) {
-        qualityLevel = (qualityLevel + 1) % 3;
+        qualityLevel = (qualityLevel + 1) % 5; // 5 quality levels: 0-4
     }
     lastZ = currentZ;
-    
-    // Quick performance mode toggle with Q key
-    static bool lastQ = false;
-    bool currentQ = glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS;
-    if (!lastQ && currentQ) {
-        quickPerformanceMode = !quickPerformanceMode;
-    }
-    lastQ = currentQ;
     
     // Reset temporal accumulation with R key (useful when lighting changes)
     static bool lastR = false;
