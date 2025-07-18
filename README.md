@@ -5,7 +5,9 @@ A casually vibe-coded yet sophisticated global illumination renderer built in C+
 
 ## Screenshots
 
-*Screenshots coming soon!
+<img width="1280" height="798" alt="Screenshot 2025-07-17 at 21 10 57" src="https://github.com/user-attachments/assets/79c82bbc-cbbc-46fb-8631-318870a86068" />
+<img width="1280" height="798" alt="Screenshot 2025-07-17 at 21 11 43" src="https://github.com/user-attachments/assets/6a46fc1e-23bc-4de7-a3a5-743539cea269" />
+
 
 ## Features
 
