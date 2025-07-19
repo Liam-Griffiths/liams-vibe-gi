@@ -220,7 +220,7 @@ vibe-gi.exe
 - **I/U**: Adjust light radius (decrease/increase)
 
 #### Performance
-- **P**: Toggle performance metrics display (detailed frame timing)
+- **X**: Show performance breakdown (detailed frame timing)
 
 ## Project Structure
 ```

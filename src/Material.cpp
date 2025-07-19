@@ -81,6 +81,14 @@ Material::Material(const glm::vec3& color, float roughness, float metallic)
     initializeDefaults();
 }
 
+Material::Material(const glm::vec3& color, float roughness, float metallic, const glm::vec3& emission)
+    : baseColor(color), roughness(roughness), metallic(metallic) {
+    initializeDefaults();
+    
+    // Set emission AFTER initializeDefaults to prevent it from being overwritten
+    this->emission = emission;
+}
+
 Material::~Material() {
     delete albedoMap;
     delete normalMap;
@@ -88,6 +96,7 @@ Material::~Material() {
     delete metallicMap;
     delete aoMap;
     delete heightMap;
+    delete emissionMap;
 }
 
 void Material::initializeDefaults() {
@@ -95,6 +104,7 @@ void Material::initializeDefaults() {
     roughness = 0.5f;
     metallic = 0.0f;
     ambientOcclusion = 1.0f;
+    emission = glm::vec3(0.0f);       // No emission by default
     tiling = glm::vec2(1.0f, 1.0f); // Default 1x1 tiling
     heightScale = 0.02f; // Subtle height displacement
     
@@ -104,6 +114,7 @@ void Material::initializeDefaults() {
     metallicMap = nullptr;
     aoMap = nullptr;
     heightMap = nullptr;
+    emissionMap = nullptr;
 }
 
 bool Material::loadPBRMaterial(const std::string& baseName) {
@@ -183,10 +194,13 @@ void Material::bindTextures() const {
     if (heightMap) {
         heightMap->bind(5);
     }
+    if (emissionMap) {
+        emissionMap->bind(6);
+    }
 }
 
 void Material::unbindTextures() const {
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 7; ++i) { // Updated to include emissionMap
         glActiveTexture(GL_TEXTURE0 + i);
         glBindTexture(GL_TEXTURE_2D, 0);
     }
@@ -201,6 +215,7 @@ void Material::setUniforms(unsigned int shaderId) const {
     glUniform1f(glGetUniformLocation(shaderId, "materialRoughness"), roughness);
     glUniform1f(glGetUniformLocation(shaderId, "materialMetallic"), metallic);
     glUniform1f(glGetUniformLocation(shaderId, "materialAO"), ambientOcclusion);
+    glUniform3fv(glGetUniformLocation(shaderId, "materialEmission"), 1, &emission[0]);
     
     // Set texture flags and bind textures
     glUniform1i(glGetUniformLocation(shaderId, "hasAlbedoMap"), albedoMap != nullptr);
@@ -209,6 +224,7 @@ void Material::setUniforms(unsigned int shaderId) const {
     glUniform1i(glGetUniformLocation(shaderId, "hasMetallicMap"), metallicMap != nullptr);
     glUniform1i(glGetUniformLocation(shaderId, "hasAOMap"), aoMap != nullptr);
     glUniform1i(glGetUniformLocation(shaderId, "hasHeightMap"), heightMap != nullptr);
+    glUniform1i(glGetUniformLocation(shaderId, "hasEmissionMap"), emissionMap != nullptr);
     
     // Set texture coordinate scaling for tiling
     glUniform2fv(glGetUniformLocation(shaderId, "materialTiling"), 1, &tiling[0]);
@@ -240,5 +256,9 @@ void Material::setUniforms(unsigned int shaderId) const {
     if (heightMap) {
         glUniform1i(glGetUniformLocation(shaderId, "heightMap"), 5);
         heightMap->bind(5);
+    }
+    if (emissionMap) {
+        glUniform1i(glGetUniformLocation(shaderId, "emissionMap"), 6);
+        emissionMap->bind(6);
     }
 } 

@@ -164,6 +164,12 @@ public:
      */
     void resetTemporalAccumulation();
     
+    /**
+     * Enable or disable temporal accumulation
+     * Useful for eliminating ghosting artifacts
+     */
+    void setTemporalAccumulation(bool enabled);
+    
     // Texture Access Methods
     
     /**
@@ -207,6 +213,12 @@ public:
      * Contains screen-space velocity for TAA and temporal filtering
      */
     unsigned int getGVelocity() const;
+    
+    /**
+     * Get emission buffer from G-buffer
+     * Contains emissive color and intensity for light-emitting surfaces
+     */
+    unsigned int getGEmission() const;
     
     /**
      * Get history texture for Temporal Anti-Aliasing
@@ -302,6 +314,7 @@ private:
     unsigned int gDepth;                       ///< Depth buffer for depth testing
     unsigned int rboDepth;                     ///< Depth renderbuffer object
     unsigned int gVelocity;                    ///< Motion vector texture for TAA (RG: screen-space velocity)
+    unsigned int gEmission;                    ///< Emission texture (RGB: emissive color and intensity)
     unsigned int historyTexture;               ///< Previous frame texture for TAA
     
     // Cascade Parameters

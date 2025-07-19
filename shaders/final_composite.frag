@@ -6,6 +6,7 @@ in vec2 TexCoords;
 uniform sampler2D gPosition;
 uniform sampler2D gNormal;
 uniform sampler2D gAlbedo;
+uniform sampler2D gEmission; // New: emission texture for emissive materials
 uniform sampler2D shadowMap;
 uniform sampler2D rcTexture[6]; // Support up to 6 cascades
 uniform sampler2D ssaoTexture; // New: SSAO texture
@@ -24,8 +25,8 @@ uniform float ssgiStrength;
 uniform float ambientStrength;
 uniform float ssaoStrength; // New: SSAO strength
 
-// Shadow calculation (same as lighting.frag)
-float ShadowCalculation(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir)
+// Enhanced shadow calculation with distance-based softness and Poisson disk sampling
+float ShadowCalculation(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir, float lightDistance)
 {
     vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
     projCoords = projCoords * 0.5 + 0.5;
@@ -33,22 +34,52 @@ float ShadowCalculation(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir)
     float closestDepth = texture(shadowMap, projCoords.xy).r; 
     float currentDepth = projCoords.z;
     
-    float bias = max(0.0001 * (1.0 - dot(normal, lightDir)), 0.00001);
+    // Improved bias calculation - more stable across different angles
+    float bias = max(0.0005 * (1.0 - dot(normal, lightDir)), 0.0001);
+    
+    // Distance-based shadow softness - closer to light = softer shadows
+    float shadowSoftness = clamp(lightDistance / lightRadius * 0.3, 0.5, 4.0);
+    
+    // Poisson disk sampling pattern for better shadow quality
+    vec2 poissonDisk[32] = vec2[](
+        vec2(-0.94201624, -0.39906216), vec2(0.94558609, -0.76890725),
+        vec2(-0.094184101, -0.92938870), vec2(0.34495938, 0.29387760),
+        vec2(-0.91588581, 0.45771432), vec2(-0.81544232, -0.87912464),
+        vec2(-0.38277543, 0.27676845), vec2(0.97484398, 0.75648379),
+        vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420),
+        vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19090188),
+        vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590),
+        vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790),
+        vec2(-0.53028528, 0.54253327), vec2(-0.35838825, -0.23242493),
+        vec2(0.37678673, 0.75146980), vec2(-0.61150398, -0.22013497),
+        vec2(0.57493719, 0.31070804), vec2(-0.87863736, -0.14102842),
+        vec2(0.23553348, -0.54442332), vec2(-0.04590084, 0.63188713),
+        vec2(0.76693445, -0.33153748), vec2(-0.59069157, 0.61982369),
+        vec2(0.10424420, 0.43456630), vec2(-0.12100214, -0.72732115),
+        vec2(0.66884386, 0.44032156), vec2(-0.33883145, 0.85307121),
+        vec2(0.29901922, -0.22748206), vec2(-0.77980003, 0.26770890)
+    );
     
     float shadow = 0.0;
     vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
-    for(int x = -2; x <= 2; ++x)
-    {
-        for(int y = -2; y <= 2; ++y)
-        {
-            float pcfDepth = texture(shadowMap, projCoords.xy + vec2(x, y) * texelSize).r; 
-            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;        
-        }    
-    }
-    shadow /= 25.0;
     
+    // Use more samples for higher quality
+    int numSamples = 32;
+    for(int i = 0; i < numSamples; ++i)
+    {
+        vec2 sampleCoord = projCoords.xy + poissonDisk[i] * texelSize * shadowSoftness;
+        float pcfDepth = texture(shadowMap, sampleCoord).r;
+        shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
+    }
+    shadow /= float(numSamples);
+    
+    // Soft edges when outside shadow map bounds
     if(projCoords.z > 1.0)
         shadow = 0.0;
+    
+    // Smooth transition at shadow map edges
+    vec2 fadeDistance = smoothstep(0.0, 0.05, projCoords.xy) * (1.0 - smoothstep(0.95, 1.0, projCoords.xy));
+    shadow *= fadeDistance.x * fadeDistance.y;
         
     return shadow;
 }
@@ -96,7 +127,7 @@ void main()
     // Use new soft attenuation based on light radius
     float attenuation = calculateSoftAttenuation(lightDistance, lightRadius);
     
-    float shadow = ShadowCalculation(fragPosLightSpace, worldNormal, lightDir);
+    float shadow = ShadowCalculation(fragPosLightSpace, worldNormal, lightDir, lightDistance);
     
     // Calculate raw lighting components (WITHOUT albedo yet)
     float nDotL = max(dot(worldNormal, lightDir), 0.0);
@@ -124,20 +155,19 @@ void main()
         vec3 smoothGi = vec3(0.0);
         float smoothBeta = 0.0;
         
-        // Ultra mode: Enhanced sampling for all cascades
-        if (activeCascades >= 6 && i >= 1) {
+        // Enhanced sampling with less aggressive smoothing for better detail preservation
+        if (activeCascades >= 6 && i >= 2) { // Only apply to cascade 2+ to preserve detail
             vec2 texelSize = 1.0 / textureSize(rcTexture[i], 0);
             
-            // Ultra mode: 5x5 high-quality upsampling kernel for smoother results
+            // 3x3 detail-preserving upsampling kernel 
             float totalWeight = 0.0;
-            for (int x = -2; x <= 2; ++x) {
-                for (int y = -2; y <= 2; ++y) {
-                    vec2 sampleCoord = TexCoords + vec2(x, y) * texelSize * 0.4;
+            for (int x = -1; x <= 1; ++x) {
+                for (int y = -1; y <= 1; ++y) {
+                    vec2 sampleCoord = TexCoords + vec2(x, y) * texelSize * 0.6;
                     vec4 sampleData = texture(rcTexture[i], sampleCoord);
                     
-                    // Gaussian-like weights for ultra-smooth upsampling
-                    float dist = sqrt(float(x*x + y*y));
-                    float weight = exp(-dist * dist * 0.5); // Gaussian falloff
+                    // Sharp weights to preserve detail
+                    float weight = (x == 0 && y == 0) ? 4.0 : 1.0; // Center weight
                     smoothGi += sampleData.rgb * weight;
                     smoothBeta += sampleData.a * weight;
                     totalWeight += weight;
@@ -146,26 +176,28 @@ void main()
             smoothGi /= totalWeight;
             smoothBeta /= totalWeight;
         }
-        // Standard mode: 3x3 upsampling for cascades 2+
-        else if (i >= 2) {
+        // Standard mode: Detail-preserving upsampling for cascades 3+
+        else if (i >= 3) {
             vec2 texelSize = 1.0 / textureSize(rcTexture[i], 0);
             
-            // 3x3 smooth upsampling kernel
+            // 3x3 detail-preserving upsampling kernel
+            float totalWeight = 0.0;
             for (int x = -1; x <= 1; ++x) {
                 for (int y = -1; y <= 1; ++y) {
-                    vec2 sampleCoord = TexCoords + vec2(x, y) * texelSize * 0.5;
+                    vec2 sampleCoord = TexCoords + vec2(x, y) * texelSize * 0.7;
                     vec4 sampleData = texture(rcTexture[i], sampleCoord);
                     
-                    // Gaussian-like weights for smooth upsampling
-                    float weight = 1.0 / (1.0 + abs(float(x)) + abs(float(y)));
+                    // Less aggressive weights to preserve more detail
+                    float weight = (x == 0 && y == 0) ? 3.0 : 1.0; // Center emphasis
                     smoothGi += sampleData.rgb * weight;
                     smoothBeta += sampleData.a * weight;
+                    totalWeight += weight;
                 }
             }
-            smoothGi /= 9.0; // Normalize by sample count
-            smoothBeta /= 9.0;
+            smoothGi /= totalWeight;
+            smoothBeta /= totalWeight;
         } else {
-            // High resolution cascades can be sampled directly
+            // High resolution cascades (0, 1, 2) sampled directly for maximum detail
             vec4 cascadeData = texture(rcTexture[i], TexCoords);
             smoothGi = cascadeData.rgb;
             smoothBeta = cascadeData.a;
@@ -192,21 +224,21 @@ void main()
         
         float betaWeight = cascadeBeta;
         
-        // Ultra mode: Enhanced inter-cascade smoothing
-        if (activeCascades >= 6 && i > 0 && i < (activeCascades - 1)) {
-            // Ultra mode: smoother blending with neighboring cascades
+        // Minimal inter-cascade blending to preserve detail
+        if (activeCascades >= 6 && i > 2 && i < (activeCascades - 1)) {
+            // Ultra mode: only blend higher cascades to preserve fine detail
             vec3 prevCascade = cascadeContributions[i-1];
             vec3 nextCascade = cascadeContributions[i+1];
             
-            float blendFactor = 0.08; // Reduced blending to prevent brightness accumulation
+            float blendFactor = 0.04; // Much reduced blending to preserve detail
             cascadeGi = mix(cascadeGi, (prevCascade + nextCascade) * 0.5, blendFactor);
         }
-        // Standard inter-cascade smoothing for other modes
-        else if (i > 0 && i < (activeCascades - 1)) {
+        // Standard mode: only blend highest cascades to preserve detail
+        else if (i > 3 && i < (activeCascades - 1)) {
             vec3 prevCascade = cascadeContributions[i-1];
             vec3 nextCascade = cascadeContributions[i+1];
             
-            float blendFactor = 0.08; // Subtle blending
+            float blendFactor = 0.05; // Minimal blending
             cascadeGi = mix(cascadeGi, (prevCascade + nextCascade) * 0.5, blendFactor);
         }
         
@@ -219,41 +251,69 @@ void main()
         indirectDiffuse /= totalWeight;
     }
     
-    // Apply additional spatial smoothing to the final GI result
-    vec2 screenTexelSize = 1.0 / textureSize(gPosition, 0);
-    vec3 smoothedIndirect = indirectDiffuse;
+    // Universal spatial interpolation to "join up" sparse GI hits for smooth lighting
+    vec3 originalGI = indirectDiffuse;
     
-    // Light spatial smoothing pass over the final GI
-    for (int x = -1; x <= 1; ++x) {
-        for (int y = -1; y <= 1; ++y) {
-            if (x == 0 && y == 0) continue; // Skip center
+        // Apply to any scene with significant GI contribution (selective with higher res data)
+    float giLuminance = dot(indirectDiffuse, vec3(0.299, 0.587, 0.114));
+    
+    if (giLuminance > 0.01) { // More selective threshold for higher quality data
+        // Bilateral upsampling to smooth sparse GI lighting
+        vec3 interpolatedGI = vec3(0.0);
+        float interpolationWeight = 0.0;
+        
+        vec2 texelSize = 1.0 / textureSize(gPosition, 0);
+        vec3 centerPosition = texture(gPosition, TexCoords).xyz;
+        vec2 centerNormalXY = texture(gNormal, TexCoords).rg;
+        float centerNormalZ = sqrt(max(0.0, 1.0 - dot(centerNormalXY, centerNormalXY)));
+        vec3 centerNormal = normalize(vec3(centerNormalXY, centerNormalZ));
+        
+        // Large sampling pattern for interpolation
+        vec2 interpolationSamples[12] = vec2[](
+            vec2(-2.0, -2.0), vec2(0.0, -2.0), vec2(2.0, -2.0),
+            vec2(-2.0,  0.0),                   vec2(2.0,  0.0),
+            vec2(-2.0,  2.0), vec2(0.0,  2.0), vec2(2.0,  2.0),
+            vec2(-3.0,  0.0), vec2(3.0,  0.0), vec2(0.0, -3.0), vec2(0.0,  3.0)
+        );
+        
+        for (int i = 0; i < 12; ++i) {
+            vec2 sampleCoord = TexCoords + interpolationSamples[i] * texelSize * 2.5;
             
-            vec2 neighborCoord = TexCoords + vec2(x, y) * screenTexelSize;
-            vec3 neighborPos = texture(gPosition, neighborCoord).xyz;
-            // Reconstruct neighbor normal from RG16F format
-        vec2 neighborNormalXY = texture(gNormal, neighborCoord).rg;
-        float neighborNormalZ = sqrt(max(0.0, 1.0 - dot(neighborNormalXY, neighborNormalXY)));
-        vec3 neighborNormal = normalize(vec3(neighborNormalXY, neighborNormalZ));
-            
-            // Only blend with similar geometry
-            float depthDiff = abs(position.z - neighborPos.z);
-            float normalSim = dot(normalize(normal), normalize(neighborNormal));
-            
-            if (depthDiff < 0.5 && normalSim > 0.8) {
-                // Compute neighbor's GI contribution (simplified)
-                vec3 neighborIndirect = vec3(0.0);
-                for (int i = 0; i < 3; ++i) { // Only sample first 3 cascades for performance
-                    vec4 neighborData = texture(rcTexture[i], neighborCoord);
-                    neighborIndirect += neighborData.rgb * pow(0.8, float(i));
-                }
+            if (sampleCoord.x >= 0.0 && sampleCoord.x <= 1.0 && sampleCoord.y >= 0.0 && sampleCoord.y <= 1.0) {
+                // Sample neighbor GI from cascade 0 (highest quality)
+                vec3 neighborGI = texture(rcTexture[0], sampleCoord).rgb;
+                vec3 neighborPosition = texture(gPosition, sampleCoord).xyz;
+                vec2 neighborNormalXY = texture(gNormal, sampleCoord).rg;
+                float neighborNormalZ = sqrt(max(0.0, 1.0 - dot(neighborNormalXY, neighborNormalXY)));
+                vec3 neighborNormal = normalize(vec3(neighborNormalXY, neighborNormalZ));
                 
-                float blendWeight = 0.05; // Very subtle
-                smoothedIndirect = mix(smoothedIndirect, neighborIndirect, blendWeight);
+                // Bilateral weighting: similar depth and normal = higher weight
+                float depthDiff = abs(centerPosition.z - neighborPosition.z);
+                float normalDot = dot(centerNormal, neighborNormal);
+                
+                float depthWeight = exp(-depthDiff * 2.0); // Exponential falloff for depth
+                float normalWeight = max(0.2, normalDot);  // Normal similarity
+                
+                // Distance weight for smooth falloff
+                float distance = length(interpolationSamples[i]);
+                float distanceWeight = exp(-distance * 0.3);
+                
+                // Combined weight
+                float weight = depthWeight * normalWeight * distanceWeight;
+                
+                interpolatedGI += neighborGI * weight;
+                interpolationWeight += weight;
             }
         }
+        
+        if (interpolationWeight > 0.0) {
+            interpolatedGI /= interpolationWeight;
+            
+            // Blend original higher-res GI with interpolated smooth GI
+            float blendAmount = 0.5; // 50% interpolated, 50% original for detail preservation
+            indirectDiffuse = mix(originalGI, interpolatedGI, blendAmount);
+        }
     }
-    
-    indirectDiffuse = smoothedIndirect;
     
     // Quality-aware indirect lighting scaling
     float qualityMultiplier = 0.4; // Base multiplier
@@ -272,8 +332,11 @@ void main()
     // Apply albedo to diffuse components only (both direct and indirect)
     vec3 diffuseContribution = totalDiffuse * albedo;
     
-    // Add ambient term with SSAO applied
-    vec3 ambient = ambientStrength * 0.05 * lightRadiance * albedo * ambientOcclusion; // Apply AO to ambient
+    // Add ambient term - independent of main light and less affected by SSAO
+    vec3 ambientColor = vec3(1.0, 1.0, 1.0); // White ambient light
+    // Reduce SSAO influence on ambient since ambient light is more diffuse
+    float ambientAO = mix(1.0, ambientOcclusion, 0.3); // Only 30% SSAO influence
+    vec3 ambient = ambientStrength * 2.5 * ambientColor * albedo * ambientAO;
     
     // Apply SSAO to indirect lighting for more realistic contact shadows
     indirectDiffuse *= mix(1.0, ambientOcclusion, ssaoStrength);
@@ -282,9 +345,16 @@ void main()
     // Combine final lighting: diffuse (with albedo and AO) + specular (without albedo) + ambient (with AO)
     vec3 finalColor = diffuseContribution + directSpecular + ambient;
     
-    // FIXED: Apply exposure BEFORE tone mapping
+    // Add subtle direct emission contribution for surface visibility
+    vec3 emission = texture(gEmission, TexCoords).rgb;
+    
+    // Apply exposure BEFORE adding emission and tone mapping
     float exposure = 0.35; // Reduced base exposure
     finalColor *= exposure;
+    
+    // Add minimal direct emission to make emissive surfaces visible (prevent double-counting)
+    vec3 directEmission = emission * 0.15; // Very subtle direct contribution
+    finalColor += directEmission;
     
     // Simple Reinhard tone mapping for all modes (no Ultra special handling)
     finalColor = finalColor / (1.0 + finalColor);

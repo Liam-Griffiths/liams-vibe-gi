@@ -52,15 +52,33 @@ void RadianceCascades::setupCascades() {
     glGenTextures(numCascades, cascadeTextures.data());
 
     for (int i = 0; i < numCascades; ++i) {
-        // Start at quarter resolution for better performance, then downsample
-        int res_x = std::max(64, screenWidth >> (i + 2)); // Start at quarter resolution, min 64px
-        int res_y = std::max(64, screenHeight >> (i + 2));
+        // Ultra-high quality resolution for naturally smooth GI
+        int res_x, res_y;
+        if (i == 0) {
+            // Cascade 0: Full resolution for maximum detail
+            res_x = screenWidth;
+            res_y = screenHeight;
+        } else if (i == 1) {
+            // Cascade 1: Full resolution for smooth mid-range GI
+            res_x = screenWidth;
+            res_y = screenHeight;
+        } else if (i == 2) {
+            // Cascade 2: Three-quarter resolution for detailed far-range GI
+            res_x = (screenWidth * 3) >> 2;
+            res_y = (screenHeight * 3) >> 2;
+        } else {
+            // Higher cascades: Half resolution and down, min 128px
+            res_x = std::max(128, screenWidth >> (i - 1));
+            res_y = std::max(128, screenHeight >> (i - 1));
+        }
         cascadeWidths[i] = res_x;
         cascadeHeights[i] = res_y;
 
         glBindTexture(GL_TEXTURE_2D, cascadeTextures[i]);
-        // Use 16-bit precision for major bandwidth savings (75% less memory!)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, res_x, res_y, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+        // Use higher precision for first few cascades, 16-bit for others
+        GLenum internalFormat = (i < 2) ? GL_RGBA32F : GL_RGBA16F; // 32-bit for cascade 0-1, 16-bit for others
+        GLenum dataType = (i < 2) ? GL_FLOAT : GL_HALF_FLOAT;
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, res_x, res_y, 0, GL_RGBA, dataType, NULL);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -130,6 +148,16 @@ void RadianceCascades::setupGBuffer() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT4, GL_TEXTURE_2D, gVelocity, 0);
 
+    // Emission buffer (16-bit RGB for HDR emission values)
+    glGenTextures(1, &gEmission);
+    glBindTexture(GL_TEXTURE_2D, gEmission);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, screenWidth, screenHeight, 0, GL_RGB, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT5, GL_TEXTURE_2D, gEmission, 0);
+
     // Depth renderbuffer (24-bit is standard and efficient)
     glGenRenderbuffers(1, &rboDepth);
     glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
@@ -137,8 +165,8 @@ void RadianceCascades::setupGBuffer() {
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
 
-    unsigned int attachments[5] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3, GL_COLOR_ATTACHMENT4};
-    glDrawBuffers(5, attachments);
+    unsigned int attachments[6] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3, GL_COLOR_ATTACHMENT4, GL_COLOR_ATTACHMENT5};
+    glDrawBuffers(6, attachments);
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         std::cerr << "G-buffer incomplete!" << std::endl;
@@ -272,6 +300,8 @@ void RadianceCascades::bindForReading() {
     glBindTexture(GL_TEXTURE_2D, gAlbedo);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, gDepth);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, gEmission); // Add emission texture for GI (unit 6 to avoid conflicts)
 }
 
 void RadianceCascades::cleanup() {
@@ -281,6 +311,7 @@ void RadianceCascades::cleanup() {
     glDeleteTextures(1, &gAlbedo);
     glDeleteTextures(1, &gDepth);
     glDeleteTextures(1, &gVelocity); // Added gVelocity cleanup
+    glDeleteTextures(1, &gEmission); // Added gEmission cleanup
     glDeleteRenderbuffers(1, &rboDepth);
     glDeleteFramebuffers(numCascades, cascadeFBOs.data());
     glDeleteTextures(numCascades, cascadeTextures.data());
@@ -332,6 +363,7 @@ void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm:
     shader.setInt("gNormal", 1);
     shader.setInt("gAlbedo", 2);
     shader.setInt("gLinearDepth", 3);
+    shader.setInt("gEmission", 6); // Add emission texture for GI calculations (avoid conflict with previousCascade)
     
     bindForReading();
     FullscreenQuad quad;
@@ -394,6 +426,13 @@ void RadianceCascades::resetTemporalAccumulation() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+void RadianceCascades::setTemporalAccumulation(bool enabled) {
+    useTemporalBuffer = enabled;
+    if (!enabled) {
+        resetTemporalAccumulation();
+    }
+}
+
 unsigned int RadianceCascades::getTexture(int cascade) const {
     return cascadeTextures[cascade];
 }
@@ -411,6 +450,9 @@ unsigned int RadianceCascades::getGAlbedo() const {
 }
 unsigned int RadianceCascades::getGVelocity() const { // Added getGVelocity
     return gVelocity;
+}
+unsigned int RadianceCascades::getGEmission() const { // Added getGEmission
+    return gEmission;
 }
 unsigned int RadianceCascades::getHistoryTexture() const {
     return historyTexture;

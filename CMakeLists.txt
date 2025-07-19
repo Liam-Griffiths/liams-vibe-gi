@@ -12,8 +12,10 @@ find_package(glm REQUIRED)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/imgui)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/imgui/backends)
+include_directories(${CMAKE_SOURCE_DIR}/scripts)
 
 file(GLOB SOURCES "${CMAKE_SOURCE_DIR}/src/*.cpp")
+file(GLOB SCRIPT_SOURCES "${CMAKE_SOURCE_DIR}/scripts/*.cpp")
 
 # ImGui source files
 set(IMGUI_SOURCES
@@ -26,7 +28,7 @@ set(IMGUI_SOURCES
     third_party/imgui/backends/imgui_impl_opengl3.cpp
 )
 
-add_executable(vibe-gi ${SOURCES} ${IMGUI_SOURCES})
+add_executable(vibe-gi ${SOURCES} ${SCRIPT_SOURCES} ${IMGUI_SOURCES})
 
 target_link_libraries(vibe-gi OpenGL::GL glfw glm::glm)
 add_custom_command(TARGET vibe-gi POST_BUILD

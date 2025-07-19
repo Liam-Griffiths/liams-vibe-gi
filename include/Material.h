@@ -96,6 +96,7 @@ public:
     float roughness;            ///< Surface roughness (0 = mirror, 1 = rough)
     float metallic;             ///< Metallic property (0 = dielectric, 1 = metal)
     float ambientOcclusion;     ///< Ambient occlusion factor (0 = full shadow, 1 = no shadow)
+    glm::vec3 emission;         ///< Emission color and intensity (RGB, can be >1 for HDR)
     
     // Texture mapping properties
     glm::vec2 tiling;           ///< Texture coordinate scaling for tiling (default: 1,1)
@@ -108,6 +109,7 @@ public:
     Texture* metallicMap;       ///< Metallic values (R channel typically used)
     Texture* aoMap;             ///< Ambient occlusion texture (R channel)
     Texture* heightMap;         ///< Height/displacement map (R channel)
+    Texture* emissionMap;       ///< Emission texture (RGB)
     
     /**
      * Default constructor - Creates basic material with default properties
@@ -122,6 +124,16 @@ public:
      * @param metallic  Metallic property (default: 0.0 - non-metal)
      */
     Material(const glm::vec3& color, float roughness = 0.5f, float metallic = 0.0f);
+    
+    /**
+     * Constructor with emission support for emissive materials
+     * 
+     * @param color     Base color (default: white)
+     * @param roughness Surface roughness (default: 0.5)
+     * @param metallic  Metallic property (default: 0.0 - non-metal)
+     * @param emission  Emission color and intensity (default: no emission)
+     */
+    Material(const glm::vec3& color, float roughness, float metallic, const glm::vec3& emission);
     
     /**
      * Destructor - Cleans up all allocated textures

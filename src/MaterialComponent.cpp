@@ -1,4 +1,5 @@
 #include "../include/MaterialComponent.h"
+#include <iostream>
 
 MaterialComponent::MaterialComponent() {
     material = std::make_unique<Material>();
@@ -22,5 +23,10 @@ std::unique_ptr<MaterialComponent> MaterialComponent::createPBR(const std::strin
 
 std::unique_ptr<MaterialComponent> MaterialComponent::createSolid(const glm::vec3& color, float roughness, float metallic) {
     auto material = std::make_unique<Material>(color, roughness, metallic);
+    return std::make_unique<MaterialComponent>(std::move(material));
+}
+
+std::unique_ptr<MaterialComponent> MaterialComponent::createEmissive(const glm::vec3& color, const glm::vec3& emission, float roughness, float metallic) {
+    auto material = std::make_unique<Material>(color, roughness, metallic, emission);
     return std::make_unique<MaterialComponent>(std::move(material));
 } 

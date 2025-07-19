@@ -4,6 +4,7 @@ layout (location = 1) out vec2 gNormal;
 layout (location = 2) out vec4 gAlbedo;
 layout (location = 3) out float gLinearDepth;
 layout (location = 4) out vec2 gVelocity; // New: motion vector output
+layout (location = 5) out vec3 gEmission; // New: emission output
 
 in vec3 FragPos;
 in vec3 Normal;
@@ -21,6 +22,7 @@ uniform vec3 materialBaseColor;
 uniform float materialRoughness;
 uniform float materialMetallic;
 uniform float materialAO;
+uniform vec3 materialEmission;
 
 // Texture mapping uniforms
 uniform vec2 materialTiling;
@@ -33,6 +35,7 @@ uniform bool hasRoughnessMap;
 uniform bool hasMetallicMap;
 uniform bool hasAOMap;
 uniform bool hasHeightMap;
+uniform bool hasEmissionMap;
 
 uniform sampler2D albedoMap;
 uniform sampler2D normalMap;
@@ -40,6 +43,7 @@ uniform sampler2D roughnessMap;
 uniform sampler2D metallicMap;
 uniform sampler2D aoMap;
 uniform sampler2D heightMap;
+uniform sampler2D emissionMap;
 
 vec3 getNormalFromMap(vec2 texCoords) {
     vec3 tangentNormal = texture(normalMap, texCoords).xyz * 2.0 - 1.0;
@@ -152,4 +156,14 @@ void main()
     
     // Store velocity for TAA
     gVelocity = Velocity;
+    
+    // Calculate emission (either from texture or material emission)
+    vec3 emission = vec3(0.0);
+    if (hasMaterial) {
+        emission = materialEmission;
+        if (hasEmissionMap) {
+            emission *= texture(emissionMap, finalTexCoords).rgb;
+        }
+    }
+    gEmission = emission;
 } 

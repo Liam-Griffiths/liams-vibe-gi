@@ -7,6 +7,7 @@ uniform sampler2D gPosition;
 uniform sampler2D gNormal;
 uniform sampler2D gAlbedo;
 uniform sampler2D gLinearDepth;
+uniform sampler2D gEmission; // Add emission texture for emissive surfaces
 uniform sampler2D previousCascade;
 uniform sampler2D temporalBuffer;
 uniform int cascadeIndex;
@@ -61,32 +62,40 @@ vec4 computeRadiance(vec2 uv, int index) {
     vec3 gi = vec3(0.0);
     int numHits = 0;
     
-    // Quality-aware sampling based on total cascades (higher quality = more cascades = more samples)
-    int baseSamples = 8; // Base sample count
-    int extraSamples = max(0, (activeCascades - 2) * 3); // +3 samples per cascade above 2
-    int numSamples = baseSamples + extraSamples - index * 2; // Still reduce for higher cascade indices
-    numSamples = max(4, numSamples); // Minimum 4 samples
+    // Higher sampling for smooth emission lighting
+    int baseSamples = 20; // More samples for smoother emission
+    int extraSamples = max(0, (activeCascades - 2) * 4); // +4 samples per cascade above 2
+    int numSamples = baseSamples + extraSamples - index * 2; // Gentler reduction for higher cascades
+    numSamples = max(12, numSamples); // Higher minimum for smooth emission
     
-    // Ultra mode gets even more samples for cascade 0-2
+    // Ultra mode gets more samples for cascade 0-2 for better emission quality
     if (activeCascades >= 6 && index < 3) {
-        numSamples += 6; // Ultra boost for fine detail cascades
+        numSamples += 8; // More samples for emission quality in detailed cascades
+    }
+    
+    // Cascade 0 gets extra samples for smooth emission
+    if (index == 0) {
+        numSamples += 6; // More samples for smooth emission in primary cascade
     }
     
     float minDist = pow(2.0, float(index)) + 0.01;
     float maxDist = pow(2.0, float(index + 1));
-    float thickness = 0.08; // Slightly increased for more reliable hits
+    float thickness = 0.06; // Reduced for higher precision
     
-    // Ultra mode: higher precision raymarching
-    int numSteps = activeCascades >= 6 ? 8 : 6;
+    // Balanced raymarching for good quality and performance
+    int numSteps = activeCascades >= 6 ? 10 : 8; // Reasonable step count
     
-    // More stable world-space sampling with better distribution
-    vec2 spatialSeed = worldPos.xz * 10.0 + vec2(index * 31.0, index * 67.0); // World-based seed
+    // High-quality sampling distribution for smooth emission
+    vec2 spatialSeed = worldPos.xz * 7.0 + vec2(index * 37.0, index * 73.0); // Improved world-based seed
     
     for (int s = 0; s < numSamples; ++s) {
-        // Better distributed sampling pattern for smoother results
+        // Low-discrepancy sampling pattern for more even distribution and smoother emission
+        float phi = float(s) * 2.399963; // Golden angle for better distribution
+        float r = sqrt(float(s) + 0.5) / sqrt(float(numSamples)); // Even radial distribution
+        
         vec2 rnd = vec2(
-            rand(spatialSeed + vec2(s * 1.3, s * 2.7)),
-            rand(spatialSeed + vec2(s * 3.7, s * 4.1))
+            rand(spatialSeed + vec2(s * 1.618, phi)), // Use golden ratio for better spacing
+            rand(spatialSeed + vec2(r * 2.718, s * 3.141)) // Use mathematical constants for good distribution
         );
         
         vec3 worldDir = getHemisphereSample(worldNormal, rnd); // World space direction
@@ -123,8 +132,67 @@ vec4 computeRadiance(vec2 uv, int index) {
                 vec3 direct = sampleAlbedo * lightColor * diff * att;
                 float cosTerm = max(0.0, dot(worldNormal, worldDir));
                 
+                // Large-area optimized emission sampling for ultra-smooth lighting
+                vec3 emissionContribution = vec3(0.0);
+                float totalEmissionWeight = 0.0;
+                
+                // Poisson disk sampling pattern for optimal large-area coverage
+                vec2 poissonSamples[16] = vec2[](
+                    vec2(-0.94201624, -0.39906216), vec2(0.94558609, -0.76890725),
+                    vec2(-0.094184101, -0.92938870), vec2(0.34495938, 0.29387760),
+                    vec2(-0.91588581, 0.45771432), vec2(-0.81544232, -0.87912464),
+                    vec2(-0.38277543, 0.27676845), vec2(0.97484398, 0.75648379),
+                    vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420),
+                    vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19090188),
+                    vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590),
+                    vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790)
+                );
+                
+                vec2 texelSize = 1.0 / textureSize(gEmission, 0);
+                float samplingRadius = 6.0; // Much larger radius for smoother emission
+                
+                // Hierarchical sampling: center + wide pattern
+                // Center sample (highest weight)
+                vec3 centerEmission = texture(gEmission, sampleUV).rgb;
+                emissionContribution += centerEmission * 2.0; // Center gets double weight
+                totalEmissionWeight += 2.0;
+                
+                // Adaptive sampling: check if emission is uniform for optimization
+                vec3 cornerEmission = texture(gEmission, sampleUV + texelSize * samplingRadius * vec2(0.707, 0.707)).rgb;
+                vec3 emissionVariance = abs(centerEmission - cornerEmission);
+                float emissionUniformity = (emissionVariance.r + emissionVariance.g + emissionVariance.b) / 3.0;
+                
+                // If emission is very uniform, use fewer samples for optimization
+                int adaptiveSamples = (emissionUniformity < 0.1) ? 8 : 16; // Half samples for uniform areas
+                
+                // Wide Poisson disk pattern for large-area smoothing
+                for (int i = 0; i < adaptiveSamples; ++i) {
+                    vec2 offset = poissonSamples[i] * texelSize * samplingRadius;
+                    vec2 emissionUV = sampleUV + offset;
+                    
+                    if (emissionUV.x >= 0.0 && emissionUV.x <= 1.0 && emissionUV.y >= 0.0 && emissionUV.y <= 1.0) {
+                        vec3 sampleEmission = texture(gEmission, emissionUV).rgb;
+                        
+                        // Distance-based weighting for smooth falloff
+                        float sampleDistance = length(offset) / (texelSize.x * samplingRadius);
+                        float weight = exp(-sampleDistance * 0.5); // Gaussian-like falloff
+                        
+                        emissionContribution += sampleEmission * weight;
+                        totalEmissionWeight += weight;
+                    }
+                }
+                
+                if (totalEmissionWeight > 0.0) {
+                    emissionContribution /= totalEmissionWeight; // Weighted average of large area
+                    
+                    // Distance-based falloff for energy conservation
+                    float emissionDistance = length(worldSamplePos - worldPos);
+                    float emissionFalloff = 1.0 / (1.0 + emissionDistance * 0.012); // Even gentler for smooth gradients
+                    emissionContribution *= 10.0 * emissionFalloff; // Slightly higher for larger area sampling
+                }
+                
                 // Ultra mode: Add multi-bounce approximation
-                vec3 finalRadiance = direct;
+                vec3 finalRadiance = direct + emissionContribution;
                 if (activeCascades >= 6 && index < 2) {
                     // Approximate second bounce using albedo and average scene illumination
                     vec3 multiBounce = sampleAlbedo * lightColor * 0.02 * att; // Barely noticeable second bounce
@@ -156,38 +224,57 @@ vec4 computeRadiance(vec2 uv, int index) {
         vec3 temporalGi = temporal.rgb;
         float temporalBeta = temporal.a;
         
-        if (length(temporalGi) > 0.001) {
-            // Ultra mode: More sophisticated temporal filtering
-            float blendFactor = 0.15; // Base blend factor
+                  if (length(temporalGi) > 0.001) {
+            // Emission-aware temporal blending for smoother emissive lighting
+            vec3 currentEmission = texture(gEmission, TexCoords).rgb;
+            float emissionLuminance = dot(currentEmission, vec3(0.299, 0.587, 0.114));
             
-            if (activeCascades >= 6) {
-                // Ultra mode: More stable temporal accumulation
-                blendFactor = 0.10; // Slower accumulation for higher stability
-                
-                // Variance-based adaptive blending for Ultra mode
-                vec3 giVariance = abs(gi - temporalGi);
-                float varianceAmount = (giVariance.r + giVariance.g + giVariance.b) / 3.0;
-                if (varianceAmount > 0.1) {
-                    blendFactor = mix(0.10, 0.25, min(varianceAmount / 0.5, 1.0)); // Adapt to changes
-                }
-            } else {
-                // Standard mode: regular blending
-                blendFactor = 0.20;
+            // Base blending - enough current frame to prevent blotchiness
+            float blendFactor = 0.6; // 60% current frame, 40% temporal for balance
+            
+                         // Near emissive surfaces, use much more temporal accumulation for ultra-smooth results
+             if (emissionLuminance > 0.1) {
+                 blendFactor = 0.25; // 25% current frame, 75% temporal near emission for maximum smoothness
+             } else if (emissionLuminance > 0.01) {
+                 blendFactor = 0.35; // 35% current frame, 65% temporal for indirect emission influence
+             }
+            
+                         if (activeCascades >= 6) {
+                 // Ultra mode: ultra-smooth near emission, responsive elsewhere
+                 if (emissionLuminance > 0.1) {
+                     blendFactor = 0.2; // 20% current, 80% temporal for maximum smoothness
+                 } else if (emissionLuminance > 0.01) {
+                     blendFactor = 0.3; // 30% current, 70% temporal for indirect emission
+                 } else {
+                     blendFactor = 0.7; // 70% current, 30% temporal away from emission
+                 }
+                 
+                 // Variance-based adaptive blending for Ultra mode (only away from emission)
+                 vec3 giVariance = abs(gi - temporalGi);
+                 float varianceAmount = (giVariance.r + giVariance.g + giVariance.b) / 3.0;
+                 if (varianceAmount > 0.05 && emissionLuminance < 0.01) { // Only be responsive away from emission
+                     blendFactor = 0.85; // 85% current frame when there's change but not near emission
+                 }
+             } else {
+                 // Standard mode: emission-aware blending
+                 if (emissionLuminance > 0.1) {
+                     blendFactor = 0.3; // 30% current, 70% temporal near emission
+                 } else if (emissionLuminance > 0.01) {
+                     blendFactor = 0.4; // 40% current, 60% temporal for indirect emission  
+                 } else {
+                     blendFactor = 0.65; // 65% current, 35% temporal away from emission
+                 }
+             }
+            
+            // For first few frames, use more current frame for quick convergence
+            if (frameCounter < 15) {
+                float convergence = float(frameCounter) / 15.0;
+                blendFactor = mix(0.9, blendFactor, convergence); // Quick convergence
             }
             
-            // For first few frames, use even gentler blending
-            if (frameCounter < 60) {
-                float warmupFactor = float(frameCounter) / 60.0;
-                blendFactor = mix(0.05, blendFactor, warmupFactor); // Gradual warmup
-            }
-            
-            // Exponential moving average instead of simple mix to prevent accumulation
-            gi = mix(gi, temporalGi, blendFactor);
-            beta = mix(beta, temporalBeta, blendFactor);
-            
-            // Energy conservation - clamp to prevent infinite accumulation
-            float maxEnergy = activeCascades >= 6 ? 3.0 : 2.0; // Ultra mode allows more energy
-            gi = clamp(gi, vec3(0.0), vec3(maxEnergy));
+            // Exponential moving average - blend from temporal to current (parameters fixed!)
+            gi = mix(temporalGi, gi, blendFactor);
+            beta = mix(temporalBeta, beta, blendFactor);
         }
     }
     

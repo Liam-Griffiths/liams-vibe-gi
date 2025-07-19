@@ -11,11 +11,11 @@ uniform mat4 currentViewProj;
 uniform mat4 previousViewProj;
 uniform float frameCounter;
 
-// TAA Parameters - Strengthened for better anti-aliasing
-const float VELOCITY_WEIGHT = 0.08;
-const float MIN_BLEND_FACTOR = 0.02;  // Use more temporal history
-const float MAX_BLEND_FACTOR = 0.08;  // Limit current frame contribution
-const float LUMA_WEIGHT = 0.35;
+// TAA Parameters - Much more aggressive to eliminate ghosting
+const float VELOCITY_WEIGHT = 0.02;
+const float MIN_BLEND_FACTOR = 0.15;  // Much more responsive to changes
+const float MAX_BLEND_FACTOR = 0.50;  // Allow much more current frame contribution
+const float LUMA_WEIGHT = 0.15;
 
 vec3 RGB2YCoCg(vec3 RGB) {
     float Y  = dot(RGB, vec3( 0.25, 0.5,  0.25));
@@ -111,9 +111,9 @@ void main() {
     vec3 neighborVariance = (neighborSqSum / sampleCount) - (neighborMean * neighborMean);
     vec3 neighborStdDev = sqrt(max(neighborVariance, vec3(0.0)));
     
-    // Clamp history to neighborhood (variance clipping) - tighter bounds for stronger TAA
-    vec3 minColor = neighborMean - neighborStdDev * 0.75;  // Tighter variance bounds
-    vec3 maxColor = neighborMean + neighborStdDev * 0.75;
+    // Clamp history to neighborhood (variance clipping) - looser bounds to reduce ghosting
+    vec3 minColor = neighborMean - neighborStdDev * 1.2;  // Looser variance bounds
+    vec3 maxColor = neighborMean + neighborStdDev * 1.2;
     vec3 clampedHistory = clamp(historyYCoCg, minColor, maxColor);
     
     // Calculate blend factor based on multiple criteria
@@ -124,18 +124,18 @@ void main() {
     float lumaDiff = abs(currentYCoCg.x - clampedHistory.x);
     float lumaFactor = clamp(lumaDiff / LUMA_WEIGHT, 0.0, 1.0);
     
-    // Distance from clamp (how much history was modified) - more aggressive
+    // Distance from clamp (how much history was modified) - less aggressive
     float clampDistance = length(historyYCoCg - clampedHistory);
-    float clampFactor = clamp(clampDistance * 3.5, 0.0, 1.0);
+    float clampFactor = clamp(clampDistance * 2.0, 0.0, 1.0);
     
     // Combine factors for final blend weight
     float blendFactor = max(max(velocityFactor, lumaFactor), clampFactor);
     blendFactor = mix(MIN_BLEND_FACTOR, MAX_BLEND_FACTOR, blendFactor);
     
     // For the first few frames, use higher blend factor to establish history
-    if (frameCounter < 20.0) {
-        float warmupFactor = frameCounter / 20.0;
-        blendFactor = mix(0.3, blendFactor, warmupFactor);  // Less aggressive warmup
+    if (frameCounter < 15.0) {
+        float warmupFactor = frameCounter / 15.0;
+        blendFactor = mix(0.4, blendFactor, warmupFactor);  // Even less aggressive warmup
     }
     
     // Blend current and history

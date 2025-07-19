@@ -23,6 +23,8 @@
 #include "../include/MeshComponent.h"
 #include "../include/MaterialComponent.h"
 #include "../include/LightComponent.h"
+#include "../scripts/Behaviour.h"
+#include "../scripts/RotationComponent.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
@@ -358,6 +360,58 @@ void Scene::loadTeapotLightbox() {
         bunnyMesh = std::make_unique<Mesh>(cubeVertices);
     }
 
+    // Load the dragon mesh
+    std::cout << "Attempting to load dragon model from: models/dragon.obj" << std::endl;
+    dragonMesh = Mesh::loadFromOBJ("models/dragon.obj");
+    if (!dragonMesh) {
+        std::cerr << "Failed to load dragon model, falling back to cube" << std::endl;
+        // Fallback to a simple cube if dragon loading fails
+        std::vector<Vertex> cubeVertices = {
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)}
+        };
+        dragonMesh = std::make_unique<Mesh>(cubeVertices);
+    }
+
     // Create cube mesh for walls
     std::vector<Vertex> cubeVertices = {
         // positions          // normals
@@ -405,36 +459,36 @@ void Scene::loadTeapotLightbox() {
     };
     cubeMesh = std::make_unique<Mesh>(cubeVertices);
 
-    // Floor with stone texture - lowered and bigger
-    floorMesh = Mesh::createPlane(15.0f, 15.0f, 8, 8); // Large floor with segments for tiling
+    // Floor with stone texture - larger lightbox
+    floorMesh = Mesh::createPlane(25.0f, 25.0f, 8, 8); // Much larger floor for bigger lightbox
     auto floor = std::make_unique<Entity>();
     floor->addComponent(std::make_unique<TransformComponent>(glm::vec3(0.0f, -3.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(1.0f, 1.0f, 1.0f))); // No rotation - plane should be horizontal by default
     floor->addComponent(std::make_unique<MeshComponent>(floorMesh.get(), glm::vec3(1.0f, 1.0f, 1.0f))); // White base color, will be overridden by material
-    auto stoneMaterial = MaterialComponent::createPBR("stone", glm::vec2(3.0f, 3.0f), 0.025f); // Load stone textures with tiling
+    auto stoneMaterial = MaterialComponent::createPBR("stone", glm::vec2(5.0f, 5.0f), 0.025f); // More tiling for larger floor
     floor->addComponent(std::move(stoneMaterial));
     entities.push_back(std::move(floor));
 
-    // Ceiling (light gray) - raised and bigger
+    // Ceiling (light gray) - much larger and higher
     auto ceiling = std::make_unique<Entity>();
-    ceiling->addComponent(std::make_unique<TransformComponent>(glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f), glm::vec3(15.0f, 0.1f, 15.0f))); // Bigger and higher
+    ceiling->addComponent(std::make_unique<TransformComponent>(glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f), glm::vec3(25.0f, 0.1f, 25.0f))); // Much bigger and higher
     ceiling->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.9f, 0.9f, 0.9f)));
     entities.push_back(std::move(ceiling));
 
-    // Left wall (green) - taller and longer
+    // Left wall (green) - much taller and longer
     auto leftWall = std::make_unique<Entity>();
-    leftWall->addComponent(std::make_unique<TransformComponent>(glm::vec3(-7.6f, 0.0f, 0.0f), glm::vec3(0.0f), glm::vec3(0.1f, 6.0f, 15.0f))); // Taller (6.0f) and longer
+    leftWall->addComponent(std::make_unique<TransformComponent>(glm::vec3(-12.6f, 1.0f, 0.0f), glm::vec3(0.0f), glm::vec3(0.1f, 8.0f, 25.0f))); // Much taller and longer
     leftWall->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.12f, 0.45f, 0.15f))); // Classic green
     entities.push_back(std::move(leftWall));
 
-    // Right wall (red) - taller and longer
+    // Right wall (red) - much taller and longer
     auto rightWall = std::make_unique<Entity>();
-    rightWall->addComponent(std::make_unique<TransformComponent>(glm::vec3(7.6f, 0.0f, 0.0f), glm::vec3(0.0f), glm::vec3(0.1f, 6.0f, 15.0f))); // Taller (6.0f) and longer
+    rightWall->addComponent(std::make_unique<TransformComponent>(glm::vec3(12.6f, 1.0f, 0.0f), glm::vec3(0.0f), glm::vec3(0.1f, 8.0f, 25.0f))); // Much taller and longer
     rightWall->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.7f, 0.12f, 0.15f))); // Classic red
     entities.push_back(std::move(rightWall));
 
-    // Back wall (white) - taller and wider
+    // Back wall (white) - much taller and wider
     auto backWall = std::make_unique<Entity>();
-    backWall->addComponent(std::make_unique<TransformComponent>(glm::vec3(0.0f, 0.0f, -7.6f), glm::vec3(0.0f), glm::vec3(15.0f, 6.0f, 0.1f))); // Taller (6.0f) and wider
+    backWall->addComponent(std::make_unique<TransformComponent>(glm::vec3(0.0f, 1.0f, -12.6f), glm::vec3(0.0f), glm::vec3(25.0f, 8.0f, 0.1f))); // Much taller and wider
     backWall->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.9f, 0.9f, 0.9f)));
     entities.push_back(std::move(backWall));
 
@@ -444,9 +498,9 @@ void Scene::loadTeapotLightbox() {
     centerTeapot->addComponent(std::make_unique<MeshComponent>(teapotMesh.get(), glm::vec3(0.7f, 0.7f, 0.9f))); // Light blue
     entities.push_back(std::move(centerTeapot));
 
-    // Left bunny (yellow, scaled up for bigger room)
+    // Left bunny (yellow, scaled up 2x larger)
     auto leftBunny = std::make_unique<Entity>();
-    leftBunny->addComponent(std::make_unique<TransformComponent>(glm::vec3(-3.5f, -2.0f, -1.5f), glm::vec3(0.0f, 30.0f, 0.0f), glm::vec3(0.9f, 0.9f, 0.9f))); // Larger
+    leftBunny->addComponent(std::make_unique<TransformComponent>(glm::vec3(-3.5f, -2.0f, -1.5f), glm::vec3(0.0f, 30.0f, 0.0f), glm::vec3(1.8f, 1.8f, 1.8f))); // 2x larger than before
     leftBunny->addComponent(std::make_unique<MeshComponent>(bunnyMesh.get(), glm::vec3(1.0f, 1.0f, 0.0f))); // Yellow
     entities.push_back(std::move(leftBunny));
 
@@ -462,6 +516,43 @@ void Scene::loadTeapotLightbox() {
     backTeapot->addComponent(std::make_unique<MeshComponent>(teapotMesh.get(), glm::vec3(0.8f, 0.3f, 0.8f))); // Purple
     entities.push_back(std::move(backTeapot));
 
+    // Tiny green dragon with rotation behavior
+    auto dragon = std::make_unique<Entity>();
+    dragon->addComponent(std::make_unique<TransformComponent>(glm::vec3(6.0f, -1.5f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.03f, 0.03f, 0.03f))); // Tiny scale to fit properly in room
+    dragon->addComponent(std::make_unique<MeshComponent>(dragonMesh.get(), glm::vec3(0.4f, 0.8f, 0.2f))); // Green dragon
+    dragon->addComponent(std::make_unique<RotationComponent>(20.0f, glm::vec3(0.0f, 1.0f, 0.0f))); // Rotate slowly around Y-axis at 20 degrees/second
+    entities.push_back(std::move(dragon));
+
+    // Emissive blue cube - glowing light source
+    auto emissiveCube = std::make_unique<Entity>();
+    emissiveCube->addComponent(std::make_unique<TransformComponent>(glm::vec3(-5.0f, 0.5f, 4.0f), glm::vec3(0.0f, 45.0f, 0.0f), glm::vec3(1.0f, 1.0f, 1.0f))); // Position and slight rotation
+    emissiveCube->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(1.0f, 1.0f, 1.0f))); // White base color (will be overridden by material)
+    auto emissiveMaterial = MaterialComponent::createEmissive(
+        glm::vec3(0.3f, 0.3f, 0.8f),   // Base color (darker blue, less overwhelming)
+        glm::vec3(1.5f, 4.0f, 10.0f),  // Emission (higher values for stronger GI, dimmer surface display)
+        0.1f,                          // Low roughness (slightly shiny)
+        0.0f                           // Non-metallic
+    );
+    emissiveCube->addComponent(std::move(emissiveMaterial));
+    entities.push_back(std::move(emissiveCube));
+
+    // Large bright white ceiling light bar for general illumination
+    auto ceilingLightBar = std::make_unique<Entity>();
+    ceilingLightBar->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(0.0f, 4.0f, 0.0f),        // Ceiling position
+        glm::vec3(0.0f, 0.0f, 0.0f),        // No rotation
+        glm::vec3(6.0f, 0.15f, 1.5f)        // Long bar shape (6x0.15x1.5)
+    ));
+    ceilingLightBar->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(1.0f, 1.0f, 1.0f))); // White base color
+    auto ceilingLightMaterial = MaterialComponent::createEmissive(
+        glm::vec3(0.98f, 0.98f, 0.98f),     // Very bright white base color
+        glm::vec3(50.0f, 50.0f, 50.0f),     // Extremely strong white emission for long-range room lighting
+        0.0f,                               // Very rough (non-reflective surface)
+        0.0f                                // Non-metallic
+    );
+    ceilingLightBar->addComponent(std::move(ceilingLightMaterial));
+    entities.push_back(std::move(ceilingLightBar));
+
     // Powerful overhead light source for large room
     auto light = std::make_unique<Entity>();
     light->addComponent(std::make_unique<TransformComponent>(glm::vec3(0.0f, 2.2f, 0.0f))); // Higher position
@@ -469,10 +560,10 @@ void Scene::loadTeapotLightbox() {
     light->addComponent(std::make_unique<MeshComponent>(Mesh::createSphere(0.15f, 20, 20).get(), glm::vec3(1.0f, 1.0f, 1.0f))); // Larger sphere
     entities.push_back(std::move(light));
 
-    // Position camera for optimal teapot viewing
-    camera.position = glm::vec3(0.0f, 0.0f, 12.0f); // Farther back for larger room
+    // Position camera for optimal viewing of larger lightbox with all objects
+    camera.position = glm::vec3(0.0f, 2.0f, 18.0f); // Much farther back and higher for larger room
     camera.yaw = -90.0f;
-    camera.pitch = 0.0f;
+    camera.pitch = -5.0f; // Slight downward angle to see floor better
     camera.updateCameraVectors();
 }
 
