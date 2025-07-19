@@ -112,7 +112,49 @@ sudo pacman -S cmake gcc glfw glm freetype2 mesa
 
 ## Build Instructions
 
-### Linux/macOS
+### Quick Start (Recommended)
+
+The easiest way to build the project is using the provided build scripts:
+
+1. Clone the repository with submodules:
+   ```bash
+   git clone --recursive <repository-url>
+   cd vibe-gi
+   ```
+   
+   **Note**: If you've already cloned without `--recursive`, initialize submodules:
+   ```bash
+   git submodule update --init --recursive
+   ```
+
+2. Build and run (Linux/macOS):
+   ```bash
+   # Build in debug mode (default)
+   ./build.sh
+
+   # Build in release mode for better performance
+   ./build.sh release
+
+   # Clean and build
+   ./build.sh clean debug
+
+   # Build and immediately run
+   ./build.sh release run
+
+   # See all options
+   ./build.sh help
+   ```
+
+3. Clean the project:
+   ```bash
+   ./clean.sh
+   ```
+
+### Manual Build (Alternative Method)
+
+If you prefer to build manually or need custom configuration:
+
+#### Linux/macOS
 1. Clone the repository with submodules:
    ```bash
    git clone --recursive <repository-url>
@@ -182,7 +224,15 @@ sudo pacman -S cmake gcc glfw glm freetype2 mesa
 
 ## Running the Renderer
 
-### Linux/macOS
+### Quick Start
+The easiest way to run the renderer is using the build script:
+```bash
+# Build and run in one command
+./build.sh release run
+```
+
+### Manual Execution
+#### Linux/macOS
 From the build directory:
 ```bash
 ./vibe-gi
@@ -230,7 +280,10 @@ vibe-gi/
 ├── shaders/       # GLSL shader programs
 ├── textures/      # PBR texture assets
 ├── models/        # 3D model files
-└── fonts/         # Text rendering fonts
+├── build.sh       # Automated build script (Linux/macOS)
+├── clean.sh       # Project cleanup script
+├── CMakeLists.txt # CMake configuration
+└── third_party/   # External dependencies (ImGui)
 ```
 
 ## Technical Implementation
