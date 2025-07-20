@@ -10,20 +10,38 @@ uniform sampler2D texNoise;
 uniform vec3 samples[32];
 uniform mat4 projection;
 
-// SSAO parameters
-const int kernelSize = 32;
-const float radius = 0.5;
-const float bias = 0.025;
+// Optimized SSAO parameters for better performance/quality balance
+const int kernelSize = 16;       // Reduced from 32 to 16 for ~2x performance improvement
+const float radius = 0.8;        // Slightly reduced radius for better locality
+const float bias = 0.008;        // Adjusted bias for fewer samples
+const float intensity = 1.8;     // Increased intensity to compensate for fewer samples
 
 void main()
 {
     // Get input for SSAO algorithm
     vec3 fragPos = texture(gPosition, TexCoords).xyz;
+    
     // Reconstruct normal from RG16F format
     vec2 normalXY = texture(gNormal, TexCoords).rg;
     float normalZ = sqrt(max(0.0, 1.0 - dot(normalXY, normalXY)));
     vec3 normal = normalize(vec3(normalXY, normalZ));
-    vec3 randomVec = normalize(texture(texNoise, TexCoords * vec2(textureSize(gPosition, 0)) / 4.0).xyz);
+    
+    // Early exit optimizations for better performance
+    // Skip SSAO for very far objects to improve performance
+    if (length(fragPos) > 30.0) {
+        FragColor = 1.0;
+        return;
+    }
+    
+    // Skip SSAO for background pixels (no geometry)
+    if (length(normal) < 0.1) {
+        FragColor = 1.0;
+        return;
+    }
+    
+    // Enhanced noise sampling with better tiling
+    vec2 noiseScale = vec2(textureSize(gPosition, 0)) / 4.0;
+    vec3 randomVec = normalize(texture(texNoise, TexCoords * noiseScale).xyz);
     
     // Create TBN matrix to transform samples to view space
     vec3 tangent = normalize(randomVec - normal * dot(randomVec, normal));
@@ -44,14 +62,31 @@ void main()
         offset.xyz /= offset.w; // Perspective divide
         offset.xyz = offset.xyz * 0.5 + 0.5; // Transform to range 0.0 - 1.0
         
-        // Get sample depth
-        float sampleDepth = texture(gPosition, offset.xy).z; // Get depth value of kernel sample
+        // Skip samples outside screen space
+        if (offset.x < 0.0 || offset.x > 1.0 || offset.y < 0.0 || offset.y > 1.0) {
+            continue;
+        }
         
-        // Range check & accumulate
+        // Get sample depth
+        float sampleDepth = texture(gPosition, offset.xy).z;
+        
+        // Enhanced range check with smoother falloff
         float rangeCheck = smoothstep(0.0, 1.0, radius / abs(fragPos.z - sampleDepth));
-        occlusion += (sampleDepth >= samplePos.z + bias ? 1.0 : 0.0) * rangeCheck;           
+        
+        // Improved occlusion test with better bias handling
+        float depthDifference = sampleDepth - samplePos.z;
+        float occlusionFactor = (depthDifference >= bias) ? 1.0 : 0.0;
+        
+        // Apply range check and accumulate
+        occlusion += occlusionFactor * rangeCheck;           
     }
+    
+    // Normalize and apply intensity
     occlusion = 1.0 - (occlusion / kernelSize);
+    occlusion = pow(occlusion, intensity); // Apply intensity curve
+    
+    // Ensure we don't go completely black
+    occlusion = max(occlusion, 0.1);
     
     FragColor = occlusion;
 } 

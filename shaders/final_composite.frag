@@ -99,6 +99,79 @@ float calculateSoftAttenuation(float distance, float radius) {
     return falloff * rangeFactor;
 }
 
+/**
+ * Final Composite Shader with Enhanced Bilateral GI Post-Filter
+ * 
+ * This shader combines all lighting components (direct + indirect + ambient + specular)
+ * into the final image with advanced bilateral filtering for ultra-smooth GI.
+ */
+
+// Bilateral GI post-filter for outlier removal and ultra-smooth results
+vec3 bilateralGI(vec2 uv, vec3 centerGI) {
+    vec3 centerPosition = texture(gPosition, uv).xyz;
+    vec2 centerNormalXY = texture(gNormal, uv).rg;
+    float centerNormalZ = sqrt(max(0.0, 1.0 - dot(centerNormalXY, centerNormalXY)));
+    vec3 centerNormal = normalize(vec3(centerNormalXY, centerNormalZ));
+    
+    vec3 C = vec3(0.0);
+    float W = 0.0;
+    float sigmaN = 0.1; // normal weight - more tolerant for smoother results
+    float sigmaD = 0.05; // depth weight - tight for edge preservation  
+    vec2 invScreenRes = 1.0 / textureSize(gPosition, 0);
+    
+    // 5x5 bilateral kernel for better smoothing (as suggested)
+    for(int y = -2; y <= 2; ++y) {
+        for(int x = -2; x <= 2; ++x) {
+            vec2 offset = vec2(float(x), float(y)) * invScreenRes;
+            vec2 sampleUV = uv + offset;
+            
+            // Skip out-of-bounds samples
+            if (sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0) {
+                continue;
+            }
+            
+            // Sample neighbor properties
+            vec3 samplePosition = texture(gPosition, sampleUV).xyz;
+            vec2 sampleNormalXY = texture(gNormal, sampleUV).rg;
+            float sampleNormalZ = sqrt(max(0.0, 1.0 - dot(sampleNormalXY, sampleNormalXY)));
+            vec3 sampleNormal = normalize(vec3(sampleNormalXY, sampleNormalZ));
+            
+            // Sample GI from the same cascade structure as the center pixel
+            vec3 sampleGI = vec3(0.0);
+            if (activeCascades > 0) {
+                // Get the most detailed cascade (cascade 0) for bilateral filtering
+                sampleGI = texture(rcTexture[0], sampleUV).rgb;
+                
+                // Blend with other cascades for completeness
+                for (int c = 1; c < activeCascades; ++c) {
+                    vec3 cascadeContrib = texture(rcTexture[c], sampleUV).rgb;
+                    float blendFactor = 1.0 / float(c + 1); // Progressive blending
+                    sampleGI = mix(sampleGI, cascadeContrib, blendFactor * 0.3);
+                }
+            } else {
+                sampleGI = centerGI; // Fallback to center if no cascades
+            }
+            
+            // Bilateral weights
+            float dn = dot(centerNormal, sampleNormal);
+            float dd = abs(centerPosition.z - samplePosition.z);
+            
+            // Combined weight calculation
+            float spatialWeight = exp(-(float(x*x + y*y)) / 2.0); // Gaussian spatial weight
+            float normalWeight = exp(-(1.0 - dn) / sigmaN);       // Normal similarity
+            float depthWeight = exp(-dd / sigmaD);                // Depth similarity
+            
+            float w = spatialWeight * normalWeight * depthWeight;
+            
+            C += sampleGI * w;
+            W += w;
+        }
+    }
+    
+    // Return filtered result or original if no valid samples
+    return (W > 0.0) ? (C / W) : centerGI;
+}
+
 void main()
 {
     vec3 position = texture(gPosition, TexCoords).xyz;
@@ -151,105 +224,21 @@ void main()
     float cascadeWeights[6];
     
     for (int i = 0; i < activeCascades; ++i) {
-        // Quality-aware sampling with better upsampling for Ultra mode
-        vec3 smoothGi = vec3(0.0);
-        float smoothBeta = 0.0;
-        
-        // Enhanced sampling with less aggressive smoothing for better detail preservation
-        if (activeCascades >= 6 && i >= 2) { // Only apply to cascade 2+ to preserve detail
-            vec2 texelSize = 1.0 / textureSize(rcTexture[i], 0);
-            
-            // 3x3 detail-preserving upsampling kernel 
-            float totalWeight = 0.0;
-            for (int x = -1; x <= 1; ++x) {
-                for (int y = -1; y <= 1; ++y) {
-                    vec2 sampleCoord = TexCoords + vec2(x, y) * texelSize * 0.6;
-                    vec4 sampleData = texture(rcTexture[i], sampleCoord);
-                    
-                    // Sharp weights to preserve detail
-                    float weight = (x == 0 && y == 0) ? 4.0 : 1.0; // Center weight
-                    smoothGi += sampleData.rgb * weight;
-                    smoothBeta += sampleData.a * weight;
-                    totalWeight += weight;
-                }
-            }
-            smoothGi /= totalWeight;
-            smoothBeta /= totalWeight;
-        }
-        // Standard mode: Detail-preserving upsampling for cascades 3+
-        else if (i >= 3) {
-            vec2 texelSize = 1.0 / textureSize(rcTexture[i], 0);
-            
-            // 3x3 detail-preserving upsampling kernel
-            float totalWeight = 0.0;
-            for (int x = -1; x <= 1; ++x) {
-                for (int y = -1; y <= 1; ++y) {
-                    vec2 sampleCoord = TexCoords + vec2(x, y) * texelSize * 0.7;
-                    vec4 sampleData = texture(rcTexture[i], sampleCoord);
-                    
-                    // Less aggressive weights to preserve more detail
-                    float weight = (x == 0 && y == 0) ? 3.0 : 1.0; // Center emphasis
-                    smoothGi += sampleData.rgb * weight;
-                    smoothBeta += sampleData.a * weight;
-                    totalWeight += weight;
-                }
-            }
-            smoothGi /= totalWeight;
-            smoothBeta /= totalWeight;
-        } else {
-            // High resolution cascades (0, 1, 2) sampled directly for maximum detail
-            vec4 cascadeData = texture(rcTexture[i], TexCoords);
-            smoothGi = cascadeData.rgb;
-            smoothBeta = cascadeData.a;
-        }
-        
-        cascadeContributions[i] = smoothGi;
-        cascadeWeights[i] = smoothBeta;
+        vec4 cascadeData = texture(rcTexture[i], TexCoords);
+        cascadeContributions[i] = cascadeData.rgb;
+        cascadeWeights[i] = cascadeData.a;
     }
     
-    // Now blend cascades smoothly with quality-aware weighting
-    for (int i = 0; i < activeCascades; ++i) {
-        vec3 cascadeGi = cascadeContributions[i];
-        float cascadeBeta = cascadeWeights[i];
-        
-        // Quality-aware cascade weighting
-        float spatialWeight;
-        if (activeCascades >= 6) {
-            // Ultra mode: More sophisticated cascade weighting
-            spatialWeight = pow(0.75, float(i)); // Gentler falloff for more cascades
-        } else {
-            // Standard mode: normal falloff
-            spatialWeight = pow(0.8, float(i));
-        }
-        
-        float betaWeight = cascadeBeta;
-        
-        // Minimal inter-cascade blending to preserve detail
-        if (activeCascades >= 6 && i > 2 && i < (activeCascades - 1)) {
-            // Ultra mode: only blend higher cascades to preserve fine detail
-            vec3 prevCascade = cascadeContributions[i-1];
-            vec3 nextCascade = cascadeContributions[i+1];
-            
-            float blendFactor = 0.04; // Much reduced blending to preserve detail
-            cascadeGi = mix(cascadeGi, (prevCascade + nextCascade) * 0.5, blendFactor);
-        }
-        // Standard mode: only blend highest cascades to preserve detail
-        else if (i > 3 && i < (activeCascades - 1)) {
-            vec3 prevCascade = cascadeContributions[i-1];
-            vec3 nextCascade = cascadeContributions[i+1];
-            
-            float blendFactor = 0.05; // Minimal blending
-            cascadeGi = mix(cascadeGi, (prevCascade + nextCascade) * 0.5, blendFactor);
-        }
-        
-        float finalWeight = spatialWeight * betaWeight;
-        indirectDiffuse += cascadeGi * finalWeight;
-        totalWeight += finalWeight;
+    vec3 mergedGI = cascadeContributions[activeCascades - 1];
+    for (int i = activeCascades - 2; i >= 0; --i) {
+        float interpFactor = 1.0 - cascadeWeights[i];
+        mergedGI = mix(mergedGI, cascadeContributions[i], interpFactor);
     }
+    indirectDiffuse = mergedGI;
     
-    if (totalWeight > 0.0) {
-        indirectDiffuse /= totalWeight;
-    }
+    // ULTRA-SMOOTH GI: Apply bilateral post-filter for final polish
+    // This removes outliers and provides the smoothest possible result
+    indirectDiffuse = bilateralGI(TexCoords, indirectDiffuse);
     
     // Universal spatial interpolation to "join up" sparse GI hits for smooth lighting
     vec3 originalGI = indirectDiffuse;
@@ -280,12 +269,17 @@ void main()
             vec2 sampleCoord = TexCoords + interpolationSamples[i] * texelSize * 2.5;
             
             if (sampleCoord.x >= 0.0 && sampleCoord.x <= 1.0 && sampleCoord.y >= 0.0 && sampleCoord.y <= 1.0) {
-                // Sample neighbor GI from cascade 0 (highest quality)
-                vec3 neighborGI = texture(rcTexture[0], sampleCoord).rgb;
+                // Sample neighbor position and normal from G-buffer
                 vec3 neighborPosition = texture(gPosition, sampleCoord).xyz;
                 vec2 neighborNormalXY = texture(gNormal, sampleCoord).rg;
                 float neighborNormalZ = sqrt(max(0.0, 1.0 - dot(neighborNormalXY, neighborNormalXY)));
                 vec3 neighborNormal = normalize(vec3(neighborNormalXY, neighborNormalZ));
+                
+                // Sample neighbor GI from cascade 0 (highest quality)
+                vec4 neighborData = texture(rcTexture[0], sampleCoord);
+                vec3 neighborGI = neighborData.rgb;
+                float neighborBeta = neighborData.a;
+                float visibilityWeight = 1.0 - neighborBeta;
                 
                 // Bilateral weighting: similar depth and normal = higher weight
                 float depthDiff = abs(centerPosition.z - neighborPosition.z);
@@ -299,7 +293,7 @@ void main()
                 float distanceWeight = exp(-distance * 0.3);
                 
                 // Combined weight
-                float weight = depthWeight * normalWeight * distanceWeight;
+                float weight = depthWeight * normalWeight * distanceWeight * visibilityWeight;
                 
                 interpolatedGI += neighborGI * weight;
                 interpolationWeight += weight;
@@ -310,16 +304,16 @@ void main()
             interpolatedGI /= interpolationWeight;
             
             // Blend original higher-res GI with interpolated smooth GI
-            float blendAmount = 0.5; // 50% interpolated, 50% original for detail preservation
+            float blendAmount = 0.6; // 50% interpolated, 50% original for detail preservation
             indirectDiffuse = mix(originalGI, interpolatedGI, blendAmount);
         }
     }
     
-    // Quality-aware indirect lighting scaling
-    float qualityMultiplier = 0.4; // Base multiplier
+    // Quality-aware indirect lighting scaling - increased for brighter GI
+    float qualityMultiplier = 1.2; // Increased base multiplier for brighter scene
     if (activeCascades >= 6) {
-        // Ultra mode: Moderate reduction now that ambient/exposure are fixed
-        qualityMultiplier = 0.22; // Moderate reduction for Ultra mode
+        // Ultra mode: Still good quality but brighter than before
+        qualityMultiplier = 0.8; // Increased for Ultra mode
     }
     indirectDiffuse *= ssgiStrength * qualityMultiplier;
     
@@ -332,11 +326,11 @@ void main()
     // Apply albedo to diffuse components only (both direct and indirect)
     vec3 diffuseContribution = totalDiffuse * albedo;
     
-    // Add ambient term - independent of main light and less affected by SSAO
+    // Add ambient term - increased for brighter scene
     vec3 ambientColor = vec3(1.0, 1.0, 1.0); // White ambient light
     // Reduce SSAO influence on ambient since ambient light is more diffuse
     float ambientAO = mix(1.0, ambientOcclusion, 0.3); // Only 30% SSAO influence
-    vec3 ambient = ambientStrength * 2.5 * ambientColor * albedo * ambientAO;
+    vec3 ambient = ambientStrength * 4.0 * ambientColor * albedo * ambientAO; // Increased ambient multiplier
     
     // Apply SSAO to indirect lighting for more realistic contact shadows
     indirectDiffuse *= mix(1.0, ambientOcclusion, ssaoStrength);

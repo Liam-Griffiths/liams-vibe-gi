@@ -22,6 +22,7 @@
  * Controls:
  * - WASD: Camera movement
  * - Mouse: Look around
+ * - 1-6: Scene selection (Cornell Box, Teapot, Stone Floor, Shadow Test, Default, Sponza)
  * - Arrow Keys: Move light
  * - K/L: Light height
  * - O/P: Light intensity
@@ -33,6 +34,7 @@
  * - F: Toggle screen space reflections
  * - C: Cycle anti-aliasing (None/FXAA/TAA)
  * - Z: Cycle quality levels
+ * - J: Toggle frustum culling
  * - R: Reset temporal accumulation
  * - X: Show performance breakdown
  * - Space: Pause/unpause
@@ -197,6 +199,10 @@ struct InputData {
     std::atomic<bool> ssrToggle{false};        // F key - toggle SSR
     std::atomic<bool> antiAliasingToggle{false}; // C key - cycle AA modes
     std::atomic<bool> showPerformance{false};  // X key - show performance breakdown
+    std::atomic<bool> cullingToggle{false};    // J key - toggle frustum culling
+    
+    // Scene selection (1-6 keys)
+    std::atomic<int> sceneSelection{-1};       // -1 = no selection, 0-5 = scene index
     
     // Light controls
     std::atomic<float> lightMoveX{0.0f};
@@ -210,23 +216,7 @@ struct InputData {
     bool mouseUpdated = false;
 };
 
-// Simplified performance monitoring
-struct PerformanceData {
-    std::atomic<int> fps{0};
-    std::atomic<float> frameTime{0.0f};
-    std::atomic<float> shadowTime{0.0f};
-    std::atomic<float> gbufferTime{0.0f};
-    std::atomic<float> ssaoTime{0.0f};
-    std::atomic<float> giTime{0.0f};
-    std::atomic<float> compositeTime{0.0f};
-    std::atomic<float> uiTime{0.0f};
-    std::atomic<bool> giEnabled{true};
-    std::atomic<bool> ssaoEnabled{false};
-    std::atomic<int> qualityLevel{2};
-    
-    std::mutex textMutex;
-    bool textReady = true;
-};
+
 
 // Function prototypes
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -234,7 +224,6 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 
 // Multithreading function prototypes
 void inputProcessingThread(GLFWwindow* window, InputData& inputData, std::atomic<bool>& running);
-void performanceMonitoringThread(PerformanceData& perfData, std::atomic<bool>& running);
 
 // Global variables for mouse input handling
 bool firstMouse = true;
@@ -271,7 +260,8 @@ void inputProcessingThread(GLFWwindow* window, InputData& inputData, std::atomic
         if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) inputData.lightRadiusDelta = -lightSpeed;
         
         // Toggle states (handled with static debouncing)
-        static bool lastM = false, lastG = false, lastT = false, lastV = false, lastZ = false, lastR = false, lastSpace = false, lastF = false, lastC = false, lastX = false;
+        static bool lastM = false, lastG = false, lastT = false, lastV = false, lastZ = false, lastR = false, lastSpace = false, lastF = false, lastC = false, lastX = false, lastJ = false;
+        static bool last1 = false, last2 = false, last3 = false, last4 = false, last5 = false, last6 = false;
         
         bool currentM = glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS;
         if (!lastM && currentM) inputData.ambientToggle = true;
@@ -313,20 +303,41 @@ void inputProcessingThread(GLFWwindow* window, InputData& inputData, std::atomic
         if (!lastX && currentX) inputData.showPerformance = true;
         lastX = currentX;
         
+        bool currentJ = glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS;
+        if (!lastJ && currentJ) inputData.cullingToggle = true;
+        lastJ = currentJ;
+        
+        // Scene selection keys (1-6)
+        bool current1 = glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS;
+        if (!last1 && current1) inputData.sceneSelection = 0; // Cornell Box
+        last1 = current1;
+        
+        bool current2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
+        if (!last2 && current2) inputData.sceneSelection = 1; // Teapot Lightbox
+        last2 = current2;
+        
+        bool current3 = glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS;
+        if (!last3 && current3) inputData.sceneSelection = 2; // Stone Floor
+        last3 = current3;
+        
+        bool current4 = glfwGetKey(window, GLFW_KEY_4) == GLFW_PRESS;
+        if (!last4 && current4) inputData.sceneSelection = 3; // Shadow Test
+        last4 = current4;
+        
+        bool current5 = glfwGetKey(window, GLFW_KEY_5) == GLFW_PRESS;
+        if (!last5 && current5) inputData.sceneSelection = 4; // Default Lightbox
+        last5 = current5;
+        
+        bool current6 = glfwGetKey(window, GLFW_KEY_6) == GLFW_PRESS;
+        if (!last6 && current6) inputData.sceneSelection = 5; // Sponza Overhead
+        last6 = current6;
+        
         // Run at 120 Hz for responsive input
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
 }
 
-// Simplified performance monitoring thread (reduced overhead after fixing UI bottleneck)
-void performanceMonitoringThread(PerformanceData& perfData, std::atomic<bool>& running) {
-    while (running) {
-        // Just keep the data updated - UI rendering is now optimized
-        
-        // Run at lower frequency since UI is now optimized
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-}
+
 
 /**
  * Main rendering loop and application entry point
@@ -339,10 +350,6 @@ int main() {
     InputData inputData;
     std::atomic<bool> inputThreadRunning{false};
     std::thread inputThread;
-    
-    PerformanceData perfData;
-    std::atomic<bool> perfThreadRunning{false};
-    std::thread perfThread;
     
     try {
         // Initialize main window with OpenGL context
@@ -360,13 +367,11 @@ int main() {
         glfwSwapInterval(0);
 
         // Initialize all shaders for the rendering pipeline
-        Shader lightingShader("shaders/lighting.vert", "shaders/lighting.frag");           // Forward lighting (legacy)
         Shader shadowShader("shaders/shadow_depth.vert", "shaders/shadow_depth.frag");     // Shadow map generation
         Shader gBufferShader("shaders/gbuffer.vert", "shaders/gbuffer.frag");             // Deferred geometry pass
         Shader rcShader("shaders/fullscreen.vert", "shaders/rc_cascade.frag");            // Radiance cascades computation
         Shader blurShader("shaders/fullscreen.vert", "shaders/blur.frag");                // GI temporal blur
         Shader compositeShader("shaders/fullscreen.vert", "shaders/final_composite.frag"); // Final lighting composite
-
         Shader copyShader("shaders/fullscreen.vert", "shaders/copy.frag");               // Direct copy (no AA)
         Shader ssaoShader("shaders/fullscreen.vert", "shaders/ssao.frag");                // Screen-space ambient occlusion
         Shader ssaoBlurShader("shaders/fullscreen.vert", "shaders/ssao_blur.frag");       // SSAO blur for noise reduction
@@ -388,7 +393,7 @@ int main() {
 
         // Initialize core rendering systems
         ShadowMap shadowMap;                                    // Directional light shadow mapping
-        RadianceCascades rc(1280, 800, 6);                     // 6-cascade radiance cascade GI system (high quality)
+        RadianceCascades rc(1280, 800, 5);                     // 6-cascade radiance cascade GI system (high quality)
         FullscreenQuad quad;                                    // Fullscreen quad for post-processing
 
         // Create offscreen framebuffer for composite pass (before TAA)
@@ -425,7 +430,13 @@ int main() {
         bool paused = false;            // Toggle for pause state
         float pausedTime = 0.0f;        // Time accumulator for pause system
         int antiAliasingMode = 2;       // AA mode: 0=none, 1=FXAA, 2=TAA (default TAA)
-        int qualityLevel = 2;           // Quality level: 0=super low, 1=performance, 2=balanced, 3=high, 4=ultra
+        int qualityLevel = 1;           // Quality level: 0=super low, 1=performance, 2=balanced, 3=high, 4=ultra (default: Performance for better FPS)
+        bool cullingEnabled = false;    // Toggle for frustum culling (default off until debugging is complete)
+
+        // Culling statistics
+        int totalEntities = 0;          // Total entities in scene
+        int culledEntities = 0;         // Entities culled this frame
+        int renderedEntities = 0;       // Entities rendered this frame
 
         float deltaTime = 0.0f;         // Frame time delta
         float lastFrame = 0.0f;         // Previous frame timestamp
@@ -442,11 +453,7 @@ int main() {
         inputThreadRunning = true;
         inputThread = std::thread(inputProcessingThread, window.getGLFWWindow(), std::ref(inputData), std::ref(inputThreadRunning));
         
-        // Start performance monitoring thread
-        perfThreadRunning = true;
-        perfThread = std::thread(performanceMonitoringThread, std::ref(perfData), std::ref(perfThreadRunning));
-        
-        // Performance monitoring (updated async from GPU)
+        // Performance monitoring for profiler output
         float frameTime = 0.0f;
         float shadowTime = 0.0f;
         float gbufferTime = 0.0f;
@@ -475,7 +482,6 @@ int main() {
             fpsTimer += deltaTime;
             if (fpsTimer >= 1.0f) {
                 fps = static_cast<int>(frameCount / fpsTimer);
-                perfData.fps = fps; // Feed to performance thread
                 frameCount = 0;
                 fpsTimer -= 1.0f;
             }
@@ -484,11 +490,14 @@ int main() {
             // UI cache variables - accessible from both input handling and UI rendering
             static int uiFrameCounter = 0;
             static std::string cachedFpsText = "FPS: 0";
-            static std::string cachedQualityText = "Quality: Balanced (3C)";
+            static std::string cachedQualityText = "Quality: Performance (3C)";
             static std::string cachedGiStatusText = "GI: ON";
             static std::string cachedSsaoStatusText = "SSAO: ON";
             static std::string cachedSsrStatusText = "SSR: OFF";
             static std::string cachedAaStatusText = "AA: TAA";
+            static std::string cachedCameraPosText = "Camera: (0.0, 0.0, 0.0)";
+            static std::string cachedSceneText = "Scene: Cornell Box";
+            static std::string cachedCullingText = "Culling: ON (0/0)";
             uiFrameCounter++;
             
             profiler.beginTimer("input_processing");
@@ -503,14 +512,12 @@ int main() {
             }
             if (inputData.giToggle.exchange(false)) {
                 giEnabled = !giEnabled;
-                perfData.giEnabled = giEnabled; // Update performance thread
                 
                 // Immediately update UI cache for responsive feedback
                 cachedGiStatusText = "GI: " + std::string(giEnabled ? "ON" : "OFF");
             }
             if (inputData.ssaoToggle.exchange(false)) {
                 ssaoEnabled = !ssaoEnabled;
-                perfData.ssaoEnabled = ssaoEnabled; // Update performance thread
                 
                 // Immediately update UI cache for responsive feedback
                 cachedSsaoStatusText = "SSAO: " + std::string(ssaoEnabled ? "ON" : "OFF");
@@ -529,13 +536,15 @@ int main() {
                 std::string aaNames[] = {"None", "FXAA", "TAA"};
                 cachedAaStatusText = "AA: " + aaNames[antiAliasingMode];
             }
+            if (inputData.cullingToggle.exchange(false)) {
+                cullingEnabled = !cullingEnabled;
+            }
             if (inputData.qualityToggle.exchange(false)) {
                 qualityLevel = (qualityLevel + 1) % 5; // 5 quality levels: 0-4
-                perfData.qualityLevel = qualityLevel; // Update performance thread
                 
                 // Immediately update UI cache for responsive feedback
                 std::string qualityNames[] = {"Super Low", "Performance", "Balanced", "High", "Ultra"};
-                std::string cascadeCounts[] = {"2C", "3C", "4C", "5C", "6C"};
+                std::string cascadeCounts[] = {"2C", "3C", "4C", "5C", "5C"};
                 cachedQualityText = "Quality: " + qualityNames[qualityLevel] + " (" + cascadeCounts[qualityLevel] + ")";
             }
 
@@ -692,6 +701,11 @@ int main() {
             glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 100.0f);
             glm::mat4 view = scene.camera.getViewMatrix();
 
+            // Update camera frustum for culling (only when culling is enabled)
+            if (cullingEnabled) {
+                scene.camera.updateFrustum(projection);
+            }
+
             // No more jittering - clean, stable rendering
             
             // Store previous frame matrices (for potential future effects)
@@ -724,8 +738,18 @@ int main() {
                 if (meshComp) {
                     auto transform = entity->getComponent<TransformComponent>();
                     if (transform) {
-                        shadowShader.setMat4("model", transform->getModelMatrix());
-                        meshComp->mesh->Draw(shadowShader.ID);
+                        // Apply same frustum culling to shadow pass for consistency
+                        bool shouldRender = true;
+                        if (cullingEnabled) {
+                            glm::vec3 center = transform->getBoundingCenter();
+                            float radius = transform->getBoundingRadius(5.0f);
+                            shouldRender = scene.camera.isSphereInFrustum(center, radius);
+                        }
+                        
+                        if (shouldRender) {
+                            shadowShader.setMat4("model", transform->getModelMatrix());
+                            meshComp->mesh->Draw(shadowShader.ID);
+                        }
                     }
                 }
             }
@@ -733,7 +757,6 @@ int main() {
             profiler.endTimer("shadow_total");
             
             shadowTime = profiler.getLastTime("shadow_total");
-            perfData.shadowTime = shadowTime; // Feed to performance thread
 
             // PASS 2: G-BUFFER GENERATION (Deferred Rendering)
             // Render geometry data (position, normal, albedo, motion vectors) to textures
@@ -750,14 +773,36 @@ int main() {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             profiler.endTimer("gbuffer_setup");
 
-            // Render all scene geometry to G-buffer
+            // Render all scene geometry to G-buffer with optional frustum culling
             profiler.beginTimer("gbuffer_render");
+            totalEntities = static_cast<int>(scene.entities.size());
+            culledEntities = 0;
+            renderedEntities = 0;
+            
             for (const auto& entity : scene.entities) {
                 auto meshComp = entity->getComponent<MeshComponent>();
                 auto transformComp = entity->getComponent<TransformComponent>();
                 auto materialComp = entity->getComponent<MaterialComponent>();
 
                 if (meshComp && transformComp && meshComp->mesh) {
+                    // Frustum culling check (if enabled)
+                    bool shouldRender = true;
+                    if (cullingEnabled) {
+                        // Calculate bounding sphere for this entity
+                        glm::vec3 center = transformComp->getBoundingCenter();
+                        float radius = transformComp->getBoundingRadius(5.0f); // Very conservative base radius
+                        
+                        // Check if entity is in camera frustum
+                        shouldRender = scene.camera.isSphereInFrustum(center, radius);
+                        
+                        if (!shouldRender) {
+                            culledEntities++;
+                            continue; // Skip rendering this entity
+                        }
+                    }
+                    
+                    renderedEntities++;
+                    
                     gBufferShader.setMat4("model", transformComp->getModelMatrix());
                     gBufferShader.setVec3("objectColor", meshComp->color);
                     
@@ -776,13 +821,15 @@ int main() {
                     if (materialComp && materialComp->material) {
                         materialComp->material->unbindTextures();
                     }
+                } else {
+                    // Count non-renderable entities as culled if they don't have required components
+                    culledEntities++;
                 }
             }
             profiler.endTimer("gbuffer_render");
             profiler.endTimer("gbuffer_total");
             
             gbufferTime = profiler.getLastTime("gbuffer_total");
-            perfData.gbufferTime = gbufferTime; // Feed to performance thread
             
             // PASS 3: SCREEN SPACE AMBIENT OCCLUSION (SSAO)
             // Compute ambient occlusion for enhanced depth perception (if enabled)
@@ -805,7 +852,6 @@ int main() {
             profiler.endTimer("ssao_total");
             
             ssaoTime = profiler.getLastTime("ssao_total");
-            perfData.ssaoTime = ssaoTime; // Feed to performance thread
             
             // 5-Level Quality System with increased cascade counts for high-end hardware
             // Super Low (0): 2 cascades,  minimal GI but still good quality
@@ -820,7 +866,7 @@ int main() {
                     case 1: activeCascades = 3; break; // Performance  
                     case 2: activeCascades = 4; break; // Balanced
                     case 3: activeCascades = 5; break; // High
-                    case 4: activeCascades = 6; break; // Ultra (maximum quality)
+                    case 4: activeCascades = 5; break; // Ultra (maximum quality)
                     default: activeCascades = 4; break; // Fallback
                 }
             }
@@ -875,7 +921,6 @@ int main() {
             profiler.endTimer("gi_total");
             
             giTime = profiler.getLastTime("gi_total");
-            perfData.giTime = giTime; // Feed to performance thread
             
             // PASS 7: FINAL COMPOSITE TO OFFSCREEN BUFFER
             // Combine all lighting contributions into final image
@@ -972,7 +1017,6 @@ int main() {
             profiler.endTimer("composite_total");
             
             compositeTime = profiler.getLastTime("composite_total");
-            perfData.compositeTime = compositeTime; // Feed to performance thread
             
             glEnable(GL_DEPTH_TEST);
 
@@ -1029,19 +1073,31 @@ int main() {
             ImGui::NewFrame();
             profiler.endTimer("ui_setup");
             
-            // PROBE 1: Update FPS every 3 frames (high frequency for responsiveness)
+            // PROBE 1: Update FPS and camera position every 3 frames (high frequency for responsiveness)
             profiler.beginTimer("ui_cache_update");
             if (uiFrameCounter % 3 == 0) {
                 cachedFpsText = "FPS: " + std::to_string(fps);
+                
+                // Update camera position display
+                glm::vec3 camPos = scene.camera.position;
+                cachedCameraPosText = "Camera: (" + 
+                    std::to_string(static_cast<int>(camPos.x * 10) / 10.0f) + ", " +
+                    std::to_string(static_cast<int>(camPos.y * 10) / 10.0f) + ", " + 
+                    std::to_string(static_cast<int>(camPos.z * 10) / 10.0f) + ")";
+                
+                // Update culling statistics display
+                cachedCullingText = "Culling: " + std::string(cullingEnabled ? "ON" : "OFF") + 
+                    " (" + std::to_string(culledEntities) + "/" + std::to_string(totalEntities) + ")";
             }
             
             // PROBE 2: Update quality status every 6 frames (medium frequency)
             if (uiFrameCounter % 6 == 0) {
                 std::string qualityNames[] = {"Super Low", "Performance", "Balanced", "High", "Ultra"};
-                std::string cascadeCounts[] = {"2C", "3C", "4C", "5C", "6C"};
+                std::string cascadeCounts[] = {"2C", "3C", "4C", "5C", "5C"};
                 cachedQualityText = "Quality: " + qualityNames[qualityLevel] + " (" + cascadeCounts[qualityLevel] + ")";
                 cachedGiStatusText = "GI: " + std::string(giEnabled ? "ON" : "OFF");
                 cachedSsaoStatusText = "SSAO: " + std::string(ssaoEnabled ? "ON" : "OFF");
+                cachedSceneText = "Scene: " + scene.getSceneName(scene.currentScene);
             }
             profiler.endTimer("ui_cache_update");
             
@@ -1059,11 +1115,22 @@ int main() {
                 
                 ImGui::Text("WASD: Move camera");
                 ImGui::Text("Mouse: Look around");
-                ImGui::Text("M: Toggle Ambient, G: Toggle GI, T: Toggle SSAO");
-                ImGui::Text("F: Toggle SSR, C: Cycle AA (None/FXAA/TAA)");
-                ImGui::Text("Z: Quality Level (5 levels), X: Show Performance");
-                ImGui::Text("Arrow Keys: Move Light, K/L: Height");
-                ImGui::Text("O/P: Light Intensity, I/U: Light Radius");
+                ImGui::Text("1-6: Scene Selection, M: Toggle Ambient");
+                ImGui::Text("G: Toggle GI, T: Toggle SSAO, F: Toggle SSR");
+                ImGui::Text("C: Cycle AA, Z: Quality, J: Toggle Culling");
+                ImGui::Text("X: Show Performance, Arrow Keys: Move Light");
+                ImGui::Text("K/L: Light Height, O/P: Intensity, I/U: Radius");
+                
+                ImGui::Separator();
+                
+                // Camera position display
+                ImGui::TextColored(ImVec4(0.8f, 0.8f, 1.0f, 1.0f), "%s", cachedCameraPosText.c_str());
+                
+                // Culling statistics display
+                ImGui::TextColored(cullingEnabled ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", cachedCullingText.c_str());
+                
+                // Scene information display
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "%s", cachedSceneText.c_str());
                 
                 ImGui::Separator();
                 
@@ -1088,9 +1155,7 @@ int main() {
             profiler.endTimer("ui_cleanup");
             profiler.endTimer("ui_total");
             
-            // Store UI timing for performance monitoring
             float uiTime = profiler.getLastTime("ui_total");
-            perfData.uiTime = uiTime; // Feed to performance thread
 
             // Store matrices for next frame
             previousView = view;
@@ -1106,21 +1171,24 @@ int main() {
             // Calculate total frame time and log detailed statistics
             auto frameEnd = std::chrono::high_resolution_clock::now();
             frameTime = std::chrono::duration<float, std::milli>(frameEnd - passStart).count();
-            perfData.frameTime = frameTime; // Feed to performance thread
             
             // Log detailed performance breakdown every 60 frames
             if (inputData.showPerformance.exchange(false)) { // Only log if requested
                 profiler.logDetailedStats();
+            }
+            
+            // Handle scene selection
+            int selectedScene = inputData.sceneSelection.exchange(-1);
+            if (selectedScene >= 0 && selectedScene <= 5) {
+                scene.loadScene(static_cast<Scene::SceneType>(selectedScene));
+                // Reset temporal accumulation when scene changes
+                rc.resetTemporalAccumulation();
             }
         }
 
         // Clean up multithreading resources
         inputThreadRunning = false;
         inputThread.join();
-        perfThreadRunning = false;
-        if (perfThread.joinable()) {
-            perfThread.join();
-        }
 
         // Cleanup ImGui
         ImGui_ImplOpenGL3_Shutdown();
@@ -1134,10 +1202,6 @@ int main() {
         inputThreadRunning = false;
         if (inputThread.joinable()) {
             inputThread.join();
-        }
-        perfThreadRunning = false;
-        if (perfThread.joinable()) {
-            perfThread.join();
         }
         
         // Cleanup ImGui even on error
@@ -1159,151 +1223,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
 }
 
-/**
- * Input processing function (DEPRECATED - now using threaded input)
- * 
- * Handles keyboard input for camera movement, light controls, and various toggles.
- * This function is called each frame and provides responsive input handling.
- * 
- * @param window        GLFW window handle
- * @param camera        Camera object for movement
- * @param scene         Scene containing entities
- * @param rc            Radiance cascades system
- * @param deltaTime     Frame time delta for smooth movement
- * @param ambientEnabled Reference to ambient lighting toggle
- * @param giEnabled     Reference to GI toggle
- * @param ssaoEnabled   Reference to SSAO toggle
- * @param paused        Reference to pause state
- * @param pausedTime    Time when pause was activated
- * @param lightEnabled  Reference to main light toggle
- */
-void processInput(GLFWwindow *window, Camera& camera, Scene& scene, RadianceCascades& rc, float deltaTime, bool& ambientEnabled, bool& giEnabled, bool& ssaoEnabled, bool& paused, float& pausedTime, int& qualityLevel, bool& lightEnabled) {
-    // Toggle ambient lighting with M key
-    static bool lastM = false;
-    bool currentM = glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS;
-    if (!lastM && currentM) {
-        ambientEnabled = !ambientEnabled;
-    }
-    lastM = currentM;
-    
-    // Toggle global illumination with G key
-    static bool lastG = false;
-    bool currentG = glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS;
-    if (!lastG && currentG) {
-        giEnabled = !giEnabled;
-    }
-    lastG = currentG;
-    
-    // Toggle SSAO with T key
-    static bool lastT = false;
-    bool currentT = glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS;
-    if (!lastT && currentT) {
-        ssaoEnabled = !ssaoEnabled;
-    }
-    lastT = currentT;
-    
-    // Toggle quality level with Z key (cycles: Super Low -> Performance -> Balanced -> High -> Ultra)
-    static bool lastZ = false;
-    bool currentZ = glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS;
-    if (!lastZ && currentZ) {
-        qualityLevel = (qualityLevel + 1) % 5; // 5 quality levels: 0-4
-    }
-    lastZ = currentZ;
-    
-    // Reset temporal accumulation with R key (useful when lighting changes)
-    static bool lastR = false;
-    bool currentR = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
-    if (!lastR && currentR) {
-        rc.resetTemporalAccumulation();
-    }
-    lastR = currentR;
-    
-    // Toggle temporal accumulation entirely with Y key (to eliminate ghosting)
-    static bool lastY = false;
-    static bool temporalEnabled = true;
-    bool currentY = glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS;
-    if (!lastY && currentY) {
-        temporalEnabled = !temporalEnabled;
-        rc.setTemporalAccumulation(temporalEnabled);
-        if (!temporalEnabled) {
-            rc.resetTemporalAccumulation(); // Clear any existing temporal data
-        }
-    }
-    lastY = currentY;
-    
-    // Pause/unpause with Space key
-    static bool lastPause = false;
-    bool currentPause = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-    if (!lastPause && currentPause) {
-        paused = !paused;
-        if (paused) {
-            pausedTime = glfwGetTime();
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        } else {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-        }
-    }
-    lastPause = currentPause;
-    
-    // Only process movement input when not paused
-    if (!paused) {
-        // Exit application
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-            glfwSetWindowShouldClose(window, true);
-            
-        // Camera movement (WASD)
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-            camera.processKeyboard(0, deltaTime);  // Forward
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-            camera.processKeyboard(1, deltaTime);  // Backward
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-            camera.processKeyboard(2, deltaTime);  // Left
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-            camera.processKeyboard(3, deltaTime);  // Right
-            
-        // Light movement controls
-        float lightSpeed = 3.0f * deltaTime;
-        
-        // Find the light entity and update its position
-        for (const auto& entity : scene.entities) {
-            if (auto light = entity->getComponent<LightComponent>()) {
-                if (auto transform = entity->getComponent<TransformComponent>()) {
-                    // Arrow keys for X/Z movement (horizontal plane)
-                    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)
-                        transform->position.x -= lightSpeed;
-                    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
-                        transform->position.x += lightSpeed;
-                    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)
-                        transform->position.z -= lightSpeed;
-                    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
-                        transform->position.z += lightSpeed;
-                        
-                    // K/L keys for Y movement (vertical)
-                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS)
-                        transform->position.y += lightSpeed;
-                    if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS)
-                        transform->position.y -= lightSpeed;
-                        
-                    // O/P keys for light intensity adjustment
-                    float intensitySpeed = 1.0f * deltaTime;
-                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS)
-                        light->intensity += intensitySpeed;
-                    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS)
-                        light->intensity = std::max(0.0f, light->intensity - intensitySpeed);
-                        
-                    // I/U keys for light radius (size/attenuation)
-                    float radiusSpeed = 1.0f * deltaTime;
-                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS)
-                        light->radius += radiusSpeed;
-                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS)
-                        light->radius = std::max(0.5f, light->radius - radiusSpeed);
-                        
-                    break; // Only move the first light found
-                }
-            }
-        }
-    }
-}
+
 
 /**
  * Mouse callback function for camera look controls

@@ -24,6 +24,7 @@
 #include "Entity.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
 
 /**
  * TransformComponent - 3D spatial transformation for entities
@@ -73,6 +74,34 @@ public:
         model = glm::scale(model, scale);                                           // S: Scale
         
         return model;
+    }
+    
+    /**
+     * Calculate bounding sphere for culling
+     * 
+     * Estimates a bounding sphere based on the object's transform.
+     * Uses the largest scale component and applies a conservative multiplier
+     * to ensure the sphere contains the entire object.
+     * 
+     * @param baseRadius Base radius of the object (default: 1.0 for unit objects)
+     * @return Radius of the bounding sphere in world space
+     */
+    float getBoundingRadius(float baseRadius = 1.0f) const {
+        // Find the maximum scale component to determine the largest dimension
+        float maxScale = std::max({scale.x, scale.y, scale.z});
+        
+        // Apply a conservative multiplier (sqrt(3) accounts for diagonal extent)
+        // This ensures the sphere contains the entire object even when rotated
+        return baseRadius * maxScale * 1.732f; // sqrt(3) ≈ 1.732
+    }
+    
+    /**
+     * Get world space center position for bounding sphere
+     * 
+     * @return World position of the entity's center
+     */
+    glm::vec3 getBoundingCenter() const {
+        return position;
     }
 };
 

@@ -39,17 +39,36 @@ public:
     // Camera System
     Camera camera;                                   ///< Main scene camera for rendering
     
+    // Scene Management
+    enum SceneType {
+        CORNELL_BOX = 0,
+        TEAPOT_LIGHTBOX = 1,
+        STONE_FLOOR = 2,
+        SHADOW_TEST = 3,
+        DEFAULT_LIGHTBOX = 4,
+        SPONZA_OVERHEAD = 5
+    };
+    
+    SceneType currentScene;                         ///< Currently loaded scene type
+    
     // Shared Mesh Resources (for performance - avoid duplicate loading)
     std::unique_ptr<Mesh> cubeMesh;                 ///< Shared cube geometry
     std::unique_ptr<Mesh> teapotMesh;               ///< Shared teapot model geometry
     std::unique_ptr<Mesh> bunnyMesh;                ///< Shared bunny model geometry
     std::unique_ptr<Mesh> dragonMesh;               ///< Shared dragon model geometry
     std::unique_ptr<Mesh> floorMesh;                ///< Shared floor plane geometry
+    std::unique_ptr<Mesh> sponzaMesh;               ///< Shared Sponza architecture model
 
     /**
      * Constructor - Initializes scene and loads default content
      */
     Scene();
+    
+    /**
+     * Scene Selection System
+     */
+    void loadScene(SceneType sceneType);
+    std::string getSceneName(SceneType sceneType) const;
     
     /**
      * Scene Loading Functions
@@ -80,6 +99,18 @@ public:
      * Demonstrates PBR material system with detailed textures
      */
     void loadStoneFloorScene();
+    
+    /**
+     * Load a traditional Cornell box scene
+     * Classic computer graphics test scene with colored walls and two boxes
+     */
+    void loadCornellBox();
+    
+    /**
+     * Load Sponza scene with dramatic overhead lighting
+     * Large architectural scene perfect for testing global illumination and shadows
+     */
+    void loadSponzaScene();
 };
 
 #endif 

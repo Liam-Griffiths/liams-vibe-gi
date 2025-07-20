@@ -35,14 +35,16 @@
  * Creates the main scene and loads the default teapot lightbox demo.
  * Sets up camera at a good viewing position for the demo content.
  */
-Scene::Scene() : camera(glm::vec3(0.0f, 0.0f, 5.0f)) {
-    // Load the main demo scene - teapot with PBR materials in lightbox setup
-    loadTeapotLightbox();
+Scene::Scene() : camera(glm::vec3(0.0f, 0.0f, 5.0f)), currentScene(CORNELL_BOX) {
+    // Load the traditional Cornell box scene - classic computer graphics test scene
+    loadCornellBox();
     
     // Alternative scenes available for different testing scenarios:
+    // loadTeapotLightbox();    // Teapot with PBR materials in lightbox setup
     // loadStoneFloorScene();   // PBR material testing with detailed textures
     // loadShadowTestScene();   // Shadow mapping testing with multiple objects
     // loadDefaultLightbox();   // Basic geometry for simple lighting tests
+    // loadSponzaScene();       // Large architectural scene with overhead lighting
 }
 
 /**
@@ -658,4 +660,454 @@ void Scene::loadStoneFloorScene() {
     camera.updateCameraVectors();
     
     std::cout << "Stone floor scene loaded with " << entities.size() << " entities." << std::endl;
+}
+
+/**
+ * Load Traditional Cornell Box Scene
+ * 
+ * Creates the classic Cornell box - a simple room used in computer graphics
+ * to test rendering algorithms, especially global illumination. The traditional
+ * Cornell box consists of:
+ * - White floor, ceiling, and back wall
+ * - Red left wall and green right wall  
+ * - A bright light source on the ceiling
+ * - Two boxes inside (one short, one tall)
+ * - Camera positioned to look into the box
+ * 
+ * This scene is perfect for testing:
+ * - Color bleeding from colored walls
+ * - Shadow casting and soft shadows
+ * - Global illumination algorithms
+ * - Light transport and indirect lighting
+ */
+void Scene::loadCornellBox() {
+    // Clear any existing entities
+    entities.clear();
+
+    std::cout << "Loading traditional Cornell box scene..." << std::endl;
+
+    // Load the teapot mesh for the spinning teapot
+    std::cout << "Attempting to load teapot model from: models/teapot.obj" << std::endl;
+    teapotMesh = Mesh::loadFromOBJ("models/teapot.obj");
+    if (!teapotMesh) {
+        std::cerr << "Failed to load teapot model, falling back to cube" << std::endl;
+        // Fallback to a simple cube if teapot loading fails
+        std::vector<Vertex> fallbackVertices = {
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+            {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)}
+        };
+        teapotMesh = std::make_unique<Mesh>(fallbackVertices);
+    }
+
+    // Create cube geometry for all box elements
+    std::vector<Vertex> cubeVertices = {
+        // Back face (facing negative Z)
+        {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+        {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+        {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+        {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  0.0f, -1.0f)},
+        {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+        {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f,  0.0f, -1.0f)},
+
+        // Front face (facing positive Z)
+        {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+        {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+        {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+        {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  0.0f, 1.0f)},
+        {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+        {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f,  0.0f, 1.0f)},
+
+        // Left face (facing negative X)
+        {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+        {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+        {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+        {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+        {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+        {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(-1.0f, 0.0f,  0.0f)},
+
+        // Right face (facing positive X)
+        {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+        {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+        {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+        {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+        {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+        {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(1.0f,  0.0f,  0.0f)},
+
+        // Bottom face (facing negative Y)
+        {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+        {glm::vec3(0.5f, -0.5f, -0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+        {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+        {glm::vec3(0.5f, -0.5f,  0.5f),   glm::vec3(0.0f, -1.0f,  0.0f)},
+        {glm::vec3(-0.5f, -0.5f,  0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+        {glm::vec3(-0.5f, -0.5f, -0.5f),  glm::vec3(0.0f, -1.0f,  0.0f)},
+
+        // Top face (facing positive Y)
+        {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)},
+        {glm::vec3(0.5f,  0.5f, -0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+        {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+        {glm::vec3(0.5f,  0.5f,  0.5f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+        {glm::vec3(-0.5f,  0.5f,  0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)},
+        {glm::vec3(-0.5f,  0.5f, -0.5f),  glm::vec3(0.0f,  1.0f,  0.0f)}
+    };
+    cubeMesh = std::make_unique<Mesh>(cubeVertices);
+
+    // Cornell Box Room Dimensions (classic proportions)
+    // The box is 5 units wide, 5 units tall, 5.5 units deep
+    const float roomWidth = 5.0f;
+    const float roomHeight = 5.0f;
+    const float roomDepth = 5.5f;
+    const float wallThickness = 0.1f;
+
+    // FLOOR - White, diffuse surface
+    auto floor = std::make_unique<Entity>();
+    floor->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(0.0f, -roomHeight/2.0f, 0.0f), 
+        glm::vec3(0.0f), 
+        glm::vec3(roomWidth, wallThickness, roomDepth)
+    ));
+    floor->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.73f, 0.73f, 0.73f))); // Cornell box white
+    entities.push_back(std::move(floor));
+
+    // CEILING WITH SQUARE SKYLIGHT - Four separate panels leaving a square hole in the center
+    const float holeSize = 1.5f; // Size of the square skylight opening
+    const float panelWidth = (roomWidth - holeSize) / 2.0f; // Width of each side panel
+    const float panelDepth = (roomDepth - holeSize) / 2.0f; // Depth of each front/back panel
+    
+    // Front ceiling panel
+    auto ceilingFront = std::make_unique<Entity>();
+    ceilingFront->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(0.0f, roomHeight/2.0f, holeSize/2.0f + panelDepth/2.0f), 
+        glm::vec3(0.0f), 
+        glm::vec3(roomWidth, wallThickness, panelDepth)
+    ));
+    ceilingFront->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.73f, 0.73f, 0.73f))); // Cornell box white
+    entities.push_back(std::move(ceilingFront));
+    
+    // Back ceiling panel
+    auto ceilingBack = std::make_unique<Entity>();
+    ceilingBack->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(0.0f, roomHeight/2.0f, -holeSize/2.0f - panelDepth/2.0f), 
+        glm::vec3(0.0f), 
+        glm::vec3(roomWidth, wallThickness, panelDepth)
+    ));
+    ceilingBack->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.73f, 0.73f, 0.73f))); // Cornell box white
+    entities.push_back(std::move(ceilingBack));
+    
+    // Left ceiling panel  
+    auto ceilingLeft = std::make_unique<Entity>();
+    ceilingLeft->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(-holeSize/2.0f - panelWidth/2.0f, roomHeight/2.0f, 0.0f), 
+        glm::vec3(0.0f), 
+        glm::vec3(panelWidth, wallThickness, holeSize)
+    ));
+    ceilingLeft->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.73f, 0.73f, 0.73f))); // Cornell box white
+    entities.push_back(std::move(ceilingLeft));
+    
+    // Right ceiling panel
+    auto ceilingRight = std::make_unique<Entity>();
+    ceilingRight->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(holeSize/2.0f + panelWidth/2.0f, roomHeight/2.0f, 0.0f), 
+        glm::vec3(0.0f), 
+        glm::vec3(panelWidth, wallThickness, holeSize)
+    ));
+    ceilingRight->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.73f, 0.73f, 0.73f))); // Cornell box white
+    entities.push_back(std::move(ceilingRight));
+
+    // BACK WALL - White, diffuse surface
+    auto backWall = std::make_unique<Entity>();
+    backWall->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(0.0f, 0.0f, -roomDepth/2.0f), 
+        glm::vec3(0.0f), 
+        glm::vec3(roomWidth, roomHeight, wallThickness)
+    ));
+    backWall->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.73f, 0.73f, 0.73f))); // Cornell box white
+    entities.push_back(std::move(backWall));
+
+    // LEFT WALL - Red, diffuse surface (Cornell box red)
+    auto leftWall = std::make_unique<Entity>();
+    leftWall->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(-roomWidth/2.0f, 0.0f, 0.0f), 
+        glm::vec3(0.0f), 
+        glm::vec3(wallThickness, roomHeight, roomDepth)
+    ));
+    leftWall->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.65f, 0.05f, 0.05f))); // Cornell box red
+    entities.push_back(std::move(leftWall));
+
+    // RIGHT WALL - Green, diffuse surface (Cornell box green)
+    auto rightWall = std::make_unique<Entity>();
+    rightWall->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(roomWidth/2.0f, 0.0f, 0.0f), 
+        glm::vec3(0.0f), 
+        glm::vec3(wallThickness, roomHeight, roomDepth)
+    ));
+    rightWall->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.12f, 0.45f, 0.15f))); // Cornell box green
+    entities.push_back(std::move(rightWall));
+
+    // TALL BOX - Traditional Cornell box placement and proportions
+    // Positioned in the back-left area, rotated 18 degrees counterclockwise
+    auto tallBox = std::make_unique<Entity>();
+    tallBox->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(-1.0f, -0.75f, -1.0f),  // Position: back-left area 
+        glm::vec3(0.0f, 18.0f, 0.0f),     // Rotation: 18 degrees around Y axis
+        glm::vec3(1.5f, 3.3f, 1.5f)       // Scale: tall rectangular box
+    ));
+    tallBox->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.73f, 0.73f, 0.73f))); // White like walls
+    entities.push_back(std::move(tallBox));
+
+    // SHORT BOX - Traditional Cornell box placement and proportions  
+    // Positioned in the front-right area, rotated -18 degrees clockwise
+    // EMISSIVE - This box acts as a warm light source
+    auto shortBox = std::make_unique<Entity>();
+    shortBox->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(1.0f, -1.67f, 0.5f),    // Position: front-right area
+        glm::vec3(0.0f, -18.0f, 0.0f),    // Rotation: -18 degrees around Y axis  
+        glm::vec3(1.5f, 1.65f, 1.5f)      // Scale: short rectangular box
+    ));
+    shortBox->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(1.0f, 1.0f, 1.0f))); // White base color (will be overridden by material)
+    auto emissiveMaterial = MaterialComponent::createEmissive(
+        glm::vec3(0.9f, 0.7f, 0.4f),      // Base color: warm orange-white
+        glm::vec3(5.0f, 3.5f, 1.5f),      // Emission: much brighter warm light (orange-white, high intensity)
+        0.2f,                             // Low roughness (slightly smooth for nice reflections)
+        0.0f                              // Non-metallic
+    );
+    shortBox->addComponent(std::move(emissiveMaterial));
+    entities.push_back(std::move(shortBox));
+
+    // AREA LIGHT SOURCE - Positioned above the skylight opening, centered
+    auto light = std::make_unique<Entity>();
+    light->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(0.0f, roomHeight/2.0f + 0.8f, 0.0f)  // Lowered above the ceiling, centered over skylight
+    ));
+    light->addComponent(std::make_unique<LightComponent>(
+        glm::vec3(1.0f, 1.0f, 0.95f),  // Slightly warm white light
+        18.0f,                          // Strong intensity to shine down through skylight
+        8.0f                            // Large radius for soft area lighting effect
+    ));
+    entities.push_back(std::move(light));
+
+    // SPINNING TEAPOT - Small teapot in front of the scene
+    auto spinningTeapot = std::make_unique<Entity>();
+    spinningTeapot->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(-0.5f, -1.8f, 2.0f),    // Position: front-left of the scene
+        glm::vec3(0.0f, 0.0f, 0.0f),      // Initial rotation
+        glm::vec3(0.4f, 0.4f, 0.4f)       // Small scale - 40% of normal size
+    ));
+    spinningTeapot->addComponent(std::make_unique<MeshComponent>(teapotMesh.get(), glm::vec3(0.7f, 0.7f, 0.9f))); // Light blue teapot
+    spinningTeapot->addComponent(std::make_unique<RotationComponent>(45.0f, glm::vec3(0.0f, 1.0f, 0.0f))); // Rotate around Y-axis at 45 degrees/second
+    entities.push_back(std::move(spinningTeapot));
+
+    // Position camera for classic Cornell box viewpoint
+    // The camera should be positioned outside the box looking in
+    camera.position = glm::vec3(1.0f, 1.8f, 18.5f);  // Much further back to see the entire Cornell box
+    camera.yaw = -70.0f;     // Looking toward negative Z (into the box)
+    camera.pitch = 0.0f;     // Level with the center of the box
+    camera.updateCameraVectors();
+
+    std::cout << "Cornell box scene loaded with " << entities.size() << " entities." << std::endl;
+    std::cout << "Enhanced Cornell box configuration:" << std::endl;
+    std::cout << "  - White floor, four-panel ceiling with square skylight, and back wall" << std::endl;
+    std::cout << "  - Red left wall, green right wall" << std::endl;
+    std::cout << "  - Two boxes: tall white box and emissive short box" << std::endl;
+    std::cout << "  - Area light source above skylight shining down through opening" << std::endl;
+    std::cout << "  - Small spinning teapot in front of scene" << std::endl;
+}
+
+/**
+ * Scene Selection System Implementation
+ */
+
+void Scene::loadScene(SceneType sceneType) {
+    currentScene = sceneType;
+    
+    switch (sceneType) {
+        case CORNELL_BOX:
+            loadCornellBox();
+            break;
+        case TEAPOT_LIGHTBOX:
+            loadTeapotLightbox();
+            break;
+        case STONE_FLOOR:
+            loadStoneFloorScene();
+            break;
+        case SHADOW_TEST:
+            loadShadowTestScene();
+            break;
+        case DEFAULT_LIGHTBOX:
+            loadDefaultLightbox();
+            break;
+        case SPONZA_OVERHEAD:
+            loadSponzaScene();
+            break;
+    }
+}
+
+std::string Scene::getSceneName(SceneType sceneType) const {
+    switch (sceneType) {
+        case CORNELL_BOX: return "Cornell Box";
+        case TEAPOT_LIGHTBOX: return "Teapot Lightbox";
+        case STONE_FLOOR: return "Stone Floor PBR";
+        case SHADOW_TEST: return "Shadow Test";
+        case DEFAULT_LIGHTBOX: return "Default Lightbox";
+        case SPONZA_OVERHEAD: return "Sponza Overhead";
+        default: return "Unknown Scene";
+    }
+}
+
+/**
+ * Load Sponza Scene with Dramatic Overhead Lighting
+ * 
+ * Creates a large-scale architectural scene featuring the Sponza atrium model
+ * with dramatic overhead lighting to showcase global illumination. This scene
+ * demonstrates:
+ * - Large architectural spaces
+ * - Complex geometry and shadows
+ * - Dramatic directional lighting from above
+ * - Multi-material surfaces
+ * - Realistic scale and proportions
+ * 
+ * The Sponza model is positioned with strong overhead lighting to create
+ * beautiful shadow patterns and demonstrate the GI system's ability to
+ * handle complex architectural scenes.
+ */
+void Scene::loadSponzaScene() {
+    // Clear any existing entities
+    entities.clear();
+
+    std::cout << "Loading Sponza scene with overhead lighting..." << std::endl;
+
+    // Load the Sponza architectural model
+    std::cout << "Attempting to load Sponza model from: models/sponza.obj" << std::endl;
+    sponzaMesh = Mesh::loadFromOBJ("models/sponza.obj");
+    if (!sponzaMesh) {
+        std::cerr << "Failed to load Sponza model, falling back to cube" << std::endl;
+        // Fallback to a simple cube if Sponza loading fails
+        std::vector<Vertex> fallbackVertices = {
+            {glm::vec3(-5.0f, -1.0f, -5.0f),  glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(5.0f, -1.0f, -5.0f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(5.0f, -1.0f,  5.0f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(5.0f, -1.0f,  5.0f),   glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(-5.0f, -1.0f,  5.0f),  glm::vec3(0.0f,  1.0f,  0.0f)},
+            {glm::vec3(-5.0f, -1.0f, -5.0f),  glm::vec3(0.0f,  1.0f,  0.0f)}
+        };
+        sponzaMesh = std::make_unique<Mesh>(fallbackVertices);
+        std::cout << "Using fallback cube geometry for Sponza scene" << std::endl;
+    } else {
+        std::cout << "Successfully loaded Sponza model" << std::endl;
+    }
+
+    // MAIN SPONZA ARCHITECTURE - Properly scaled two-story building
+    auto sponzaBuilding = std::make_unique<Entity>();
+    sponzaBuilding->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(0.0f, 0.0f, 0.0f),      // Position: centered at origin
+        glm::vec3(0.0f, 0.0f, 0.0f),      // Rotation: no rotation needed
+        glm::vec3(0.1f, 0.1f, 0.1f)       // Scale: 10x larger than tiny, but manageable size
+    ));
+    sponzaBuilding->addComponent(std::make_unique<MeshComponent>(sponzaMesh.get(), glm::vec3(0.9f, 0.85f, 0.8f))); // Warm stone color
+    entities.push_back(std::move(sponzaBuilding));
+
+    // DRAMATIC OVERHEAD LIGHTING SETUP  
+    // Main overhead light - positioned above the atrium like sunlight
+    auto mainOverheadLight = std::make_unique<Entity>();
+    mainOverheadLight->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(0.0f, 80.0f, 0.0f)     // High above the Sponza atrium (scaled appropriately)
+    ));
+    mainOverheadLight->addComponent(std::make_unique<LightComponent>(
+        glm::vec3(1.0f, 0.95f, 0.85f),   // Warm sunlight color
+        250.0f,                          // Strong intensity scaled for 0.1 building
+        40.0f                            // Large radius for soft area lighting
+    ));
+    entities.push_back(std::move(mainOverheadLight));
+
+    // SECONDARY LIGHTING - Fill lights positioned around the atrium
+    // Left fill light 
+    auto leftFillLight = std::make_unique<Entity>();
+    leftFillLight->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(-40.0f, 30.0f, 0.0f)   // Left side, elevated position
+    ));
+    leftFillLight->addComponent(std::make_unique<LightComponent>(
+        glm::vec3(0.8f, 0.9f, 1.0f),     // Cool blue fill light
+        80.0f,                           // Scaled intensity 
+        25.0f                            // Appropriate radius for lighting
+    ));
+    entities.push_back(std::move(leftFillLight));
+
+    // Right fill light
+    auto rightFillLight = std::make_unique<Entity>();
+    rightFillLight->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(40.0f, 30.0f, 0.0f)    // Right side, elevated position
+    ));
+    rightFillLight->addComponent(std::make_unique<LightComponent>(
+        glm::vec3(1.0f, 0.8f, 0.6f),     // Warm orange fill light
+        60.0f,                           // Scaled intensity
+        25.0f                            // Appropriate radius for lighting
+    ));
+    entities.push_back(std::move(rightFillLight));
+
+    // ACCENT LIGHTING - Architectural accent lights
+    // Front accent light 
+    auto frontAccentLight = std::make_unique<Entity>();
+    frontAccentLight->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(0.0f, 20.0f, 30.0f)    // Front of atrium, elevated position
+    ));
+    frontAccentLight->addComponent(std::make_unique<LightComponent>(
+        glm::vec3(1.0f, 0.7f, 0.4f),     // Warm accent color
+        40.0f,                           // Scaled intensity
+        15.0f                            // Medium radius for focused lighting
+    ));
+    entities.push_back(std::move(frontAccentLight));
+
+    // Position camera to view the Sponza atrium
+    // Place camera at a good position to see the architecture 
+    camera.position = glm::vec3(0.0f, 5.0f, 25.0f);   // Outside the atrium, elevated view
+    camera.yaw = -90.0f;      // Looking toward negative Z (into the atrium)
+    camera.pitch = -5.0f;     // Slight downward angle to see the structure
+    camera.updateCameraVectors();
+
+    std::cout << "Sponza scene loaded with " << entities.size() << " entities." << std::endl;
+    std::cout << "Sponza atrium configuration:" << std::endl;
+    std::cout << "  - Sponza atrium at proper architectural scale (10x original)" << std::endl;
+    std::cout << "  - Main overhead light positioned like sunlight (250.0 intensity)" << std::endl;
+    std::cout << "  - Two elevated fill lights (cool blue left, warm orange right)" << std::endl;
+    std::cout << "  - Front accent light for additional illumination" << std::endl;
+    std::cout << "  - Camera positioned for optimal architectural viewing" << std::endl;
+    std::cout << "  - Perfect for testing GI with complex geometry and dramatic lighting" << std::endl;
 } 

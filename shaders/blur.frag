@@ -56,7 +56,7 @@ void main() {
         0.110, 0.100, 0.085, 0.065, 0.045, 0.025
     );
     
-    vec2 texelSize = 1.0 / textureSize(inputTexture, 0);
+    // texelSize already declared earlier, no need to redeclare
     
     // Determine blur direction with adaptive strength for dark areas
     vec2 blurOffset = (blurDirection == 0) ? 
