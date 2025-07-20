@@ -1,104 +1,112 @@
 
-# Vibe-GI: Advanced Real-Time Global Illumination Renderer
+# Vibe-GI: Experimental Radiance Cascades Implementation [WIP]
 
-A sophisticated real-time global illumination renderer implementing cutting-edge graphics techniques in C++. This project demonstrates advanced rendering algorithms including radiance cascades, screen-space effects, and temporal filtering, all wrapped in a clean, educational codebase.
+**⚠️ EXPERIMENTAL VIBE CODING PROJECT ⚠️**
+
+An experimental **"vibe coding"** implementation of the **Radiance Cascades** global illumination technique described in the paper:
+
+> **"Radiance Cascades: A Novel Approach to Calculating Global Illumination [WIP]"**  
+> *by Alexander Sannikov*
+
+## What is "Vibe Coding"?
+
+This project is an experiment in **intuitive, exploratory programming** - implementing complex graphics algorithms through experimentation and iteration rather than strict engineering practices. Features are added based on "feel" and visual results rather than comprehensive planning.
+
+**This means:**
+- Code quality varies wildly
+- Features implemented based on curiosity rather than requirements
+- Bugs are features until proven otherwise
+- Documentation written after the fact (or not at all)
+- Performance optimizations are suggestions, not requirements
+
+This is a research prototype implementing concepts from Sannikov's paper. **Many features are incomplete, broken, or experimental.** This is not production-ready software.
+
+## ⚠️ Current Status & Warnings
+
+### What's Working (Somewhat)
+- ✅ Basic radiance cascades implementation (3-5 cascades)
+- ✅ Cornell box scene with proper lighting
+- ✅ Scene switching (1-6 keys) - though not all scenes work
+- ✅ Real-time camera controls
+- ✅ Multiple quality levels
+- ✅ Basic performance monitoring
+
+### What's Broken/Incomplete
+- ❌ **SSAO shader compilation errors** (normal variable issues)
+- ❌ **Sponza scene not working** (loads but doesn't render properly)
+- ❌ **Frustum culling system** (too aggressive, disabled by default)
+- ❌ Temporal accumulation stability issues
+- ❌ SSR (Screen Space Reflections) - partially implemented
+- ❌ TAA (Temporal Anti-Aliasing) - needs work
+- ❌ PBR material system - inconsistent 
+- ❌ Multi-light support - limited
+- ❌ Memory leaks and resource management
+- ❌ Cross-platform compatibility issues
+- ❌ Performance optimization needed
+- ❌ Shader errors on some systems
+
+### Known Issues
+- Shader compilation failures on certain configurations
+- **Sponza scene broken** - loads model but doesn't render/display properly
+- Performance drops in complex scenes
+- Culling system too aggressive (disabled by default)
+- Temporal filtering artifacts
+- Memory usage not optimized
+- Threading issues with input processing
+- Scene switching inconsistent - some scenes don't work
+
+## Original Paper Implementation
+
+This implementation attempts to follow the concepts outlined in Alexander Sannikov's **"Radiance Cascades"** paper. The core ideas being explored:
+
+- **Multi-scale radiance representation** across cascaded distance ranges
+- **Hierarchical light transport** from near-field to far-field
+- **Temporal accumulation** for stable convergence
+- **Angular and spatial sampling** strategies
+
+**Note**: This is an educational/research implementation and may not accurately reflect all aspects of the original paper. Many liberties have been taken, and numerous bugs exist.
 
 ## Screenshots
 
 <img width="1280" height="798" alt="Screenshot 2025-07-17 at 21 10 57" src="https://github.com/user-attachments/assets/79c82bbc-cbbc-46fb-8631-318870a86068" />
 <img width="1280" height="798" alt="Screenshot 2025-07-17 at 21 11 43" src="https://github.com/user-attachments/assets/6a46fc1e-23bc-4de7-a3a5-743539cea269" />
 
-## Core Features
-
-### Advanced Global Illumination
-- **Radiance Cascades**: State-of-the-art real-time GI with multi-bounce indirect lighting
-- **Adaptive Quality System**: 5 performance levels (2-6 cascades) with automatic brightness balancing
-- **Temporal Stability**: Advanced temporal filtering with motion vector reprojection
-- **Multi-Scale Representation**: Hierarchical lighting capture from near-field contact shadows to far-field environment lighting
-
-### Modern Rendering Pipeline
-- **Deferred Rendering**: G-buffer based pipeline for efficient lighting calculations
-- **PBR Materials**: Physically Based Rendering with albedo, normal, roughness, and metallic properties
-- **Screen-Space Effects**: 
-  - **SSAO**: Contact shadows with bilateral noise reduction
-  - **SSR**: High-quality reflections with adaptive raymarching
-- **Anti-Aliasing**: Dual TAA (Temporal) and FXAA (Spatial) systems
-- **Dynamic Lighting**: Real-time light positioning, intensity, and radius controls
-
-### Performance & Quality
-- **Real-Time Performance**: 20-60+ FPS depending on quality settings
-- **Scalable Quality**: From mobile-friendly 2-cascade setup to high-end 6-cascade ultra quality
-- **Performance Profiling**: Comprehensive frame timing breakdown with 25+ metrics
-- **Optimized Memory Usage**: 16-bit precision cascades with efficient temporal accumulation
-
-### Scene & Content
-- **Cornell Box Demo**: Classic computer graphics test scene with proper color bleeding
-- **PBR Materials**: Stone textures with full material property maps
-- **Dynamic Objects**: Animated teapot with rotation behavior
-- **Emissive Surfaces**: Light-emitting geometry for complex lighting scenarios
-- **Entity-Component-System**: Clean, modular architecture for scene management
-
-## Technical Implementation
-
-### Radiance Cascades Algorithm
-The core GI system uses a hierarchical approach to capture lighting at multiple spatial scales:
-
-```
-Cascade 0 (Near): Full resolution    - Contact shadows, local detail
-Cascade 1 (Mid):  3/4 resolution    - Medium-distance lighting  
-Cascade 2 (Far):  1/2 resolution    - Broad environmental lighting
-Higher Cascades:  Progressive LOD    - Distant lighting contribution
-```
-
-Each cascade uses adaptive angular sampling and band-limited capture to ensure proper frequency representation across distance ranges.
-
-### Quality Level Breakdown
-- **Super Low (2 cascades)**: 60+ FPS, minimal GI for integrated graphics
-- **Performance (3 cascades)**: 45-60 FPS, good balance for gaming
-- **Balanced (4 cascades)**: 35-45 FPS, enhanced quality for mid-range GPUs
-- **High (5 cascades)**: 25-35 FPS, excellent fidelity for high-end systems  
-- **Ultra (6 cascades)**: 20-30 FPS, maximum quality for benchmarking
-
-### Shader Pipeline Overview
-```
-┌─────────────┐    ┌──────────────┐    ┌─────────────┐
-│   G-Buffer  │ -> │   Radiance   │ -> │    SSAO     │
-│ Generation  │    │  Cascades    │    │ Computation │
-└─────────────┘    └──────────────┘    └─────────────┘
-        │                  │                   │
-        v                  v                   v
-┌─────────────┐    ┌──────────────┐    ┌─────────────┐
-│    SSR      │ -> │   Lighting   │ -> │     TAA     │
-│Reflections  │    │  Composite   │    │   / FXAA    │
-└─────────────┘    └──────────────┘    └─────────────┘
-```
+*Note: Screenshots may not reflect current state due to ongoing development.*
 
 ## Controls
 
-### Camera & Navigation
-- **WASD**: Camera movement (first-person controls)
-- **Mouse**: Look around (captured mouse mode)
-- **ESC**: Exit application
+### Scene Navigation
+- **WASD**: Camera movement
+- **Mouse**: Look around  
+- **1-6**: Switch between scenes:
+  - 1: Cornell Box (default - working)
+  - 2: Teapot Lightbox (working)
+  - 3: Stone Floor PBR (partial)
+  - 4: Shadow Test (experimental)
+  - 5: Default Lightbox (working)
+  - 6: Sponza Overhead (**broken**)
+- **ESC**: Exit
 
-### Rendering Quality & Effects
-- **Z**: Cycle quality levels (Super Low → Performance → Balanced → High → Ultra)
-- **G**: Toggle global illumination on/off
-- **T**: Toggle SSAO (Screen Space Ambient Occlusion)
-- **F**: Toggle SSR (Screen Space Reflections)
-- **C**: Cycle anti-aliasing modes (None → FXAA → TAA)
-- **M**: Toggle ambient lighting contribution
+### Rendering Settings
+- **Z**: Cycle quality levels (2-5 cascades)
+- **G**: Toggle global illumination
+- **T**: Toggle SSAO (currently broken)
+- **F**: Toggle SSR (experimental)
+- **C**: Cycle anti-aliasing modes
+- **J**: Toggle frustum culling
+- **M**: Toggle ambient lighting
+- **V**: Toggle main light
 
-### Dynamic Lighting Controls
-- **Arrow Keys**: Move directional light position (XZ plane)
-- **K/L**: Adjust light height (Y axis)
-- **O/P**: Control light intensity (brightness)
-- **I/U**: Adjust light radius (attenuation falloff)
-- **V**: Toggle main light on/off
+### Light Controls
+- **Arrow Keys**: Move light position
+- **K/L**: Light height
+- **O/P**: Light intensity  
+- **I/U**: Light radius
 
-### Performance & Debugging
-- **X**: Show detailed performance breakdown (25+ timing metrics)
-- **R**: Reset temporal accumulation (clears GI history)
-- **Space**: Pause/unpause rendering (enables cursor for UI interaction)
+### Debug
+- **X**: Show performance metrics
+- **R**: Reset temporal accumulation
+- **Space**: Pause/unpause
 
 ## Build Instructions
 
@@ -159,127 +167,105 @@ vcpkg install glfw3 glm freetype
    cmake --build . --config Release
    ```
 
-## Project Structure
+**Expected issues**: Shader compilation errors, performance problems, visual artifacts, Sponza scene not working.
 
+## Project Structure
 ```
 vibe-gi/
-├── src/                    # Core implementation
-│   ├── main.cpp           # Main render loop & application entry
-│   ├── Camera.cpp         # First-person camera system
-│   ├── Scene.cpp          # ECS scene management
-│   ├── RadianceCascades.cpp # Global illumination implementation
-│   └── [other components] # Materials, meshes, etc.
-├── include/               # Header files
-│   ├── RadianceCascades.h # Comprehensive GI system interface
-│   ├── Camera.h           # Camera controls and matrices
-│   └── [ECS components]   # Transform, Mesh, Material, Light components
-├── shaders/               # GLSL shader programs
-│   ├── gbuffer.*          # Deferred rendering geometry pass
-│   ├── rc_cascade.frag    # Radiance cascades computation
-│   ├── final_composite.frag # Lighting combination and tone mapping
-│   ├── ssao.*             # Screen-space ambient occlusion
-│   ├── ssr.frag           # Screen-space reflections
-│   ├── taa.frag           # Temporal anti-aliasing
-│   └── [other effects]    # Blur, FXAA, shadow mapping
-├── textures/              # PBR material assets
-├── models/                # OBJ mesh files (teapot, etc.)
-├── scripts/               # Behavior components
-├── third_party/imgui/     # Immediate mode GUI (submodule)
-├── build.sh              # Automated build script
-├── clean.sh              # Project cleanup
-└── CMakeLists.txt        # Build configuration
+├── src/                   # Core implementation (incomplete)
+│   ├── main.cpp          # Main loop with threading issues
+│   ├── RadianceCascades.cpp # GI implementation (experimental)
+│   ├── Scene.cpp         # Scene management (basic)
+│   └── [other files]     # Various states of completion
+├── shaders/              # GLSL shaders (some broken)
+│   ├── rc_cascade.frag   # Core GI shader
+│   ├── ssao.frag         # Broken SSAO shader
+│   └── [others]          # Mixed working/broken state
+├── include/              # Headers
+├── models/               # Test models (teapot, sponza, etc.)
+└── textures/             # Basic PBR textures
 ```
 
-## Technical Deep Dive
+## Research & Learning Value
 
-### Radiance Cascades Implementation
-The GI system maintains multiple spatial representations of lighting:
+This project serves as:
+- **Educational exploration** of radiance cascades concepts
+- **Reference implementation** for the Sannikov paper
+- **Testbed for GI techniques** (work in progress)
+- **Graphics programming learning** (with many bugs to fix)
+- **Experiment in "vibe-based" development** - intuitive programming approach
 
-**Near-Field Cascades (0-1)**: High resolution for local lighting effects
-- Contact shadows and surface-to-surface light transfer
-- Fine geometric detail preservation
-- High angular sampling for accurate normal-dependent lighting
+### Vibe Coding Philosophy
+- **Code by feel**: Implement what seems right, optimize later (or never)
+- **Visual-first development**: If it looks good, it probably is good
+- **Embrace the jank**: Bugs often reveal interesting behaviors
+- **Documentation is optional**: Code should speak for itself (even if it doesn't)
+- **Performance is negotiable**: 15 FPS is cinematic, right?
 
-**Far-Field Cascades (2+)**: Lower resolution for environmental lighting
-- Broad illumination patterns and environment lighting
-- Reduced angular sampling for performance
-- Progressive level-of-detail with distance
+### Limitations for Learning
+- Code quality varies significantly (by design)
+- Documentation is incomplete (intentionally minimal)
+- Many best practices violated (features, not bugs)
+- Performance not optimized (character building)
+- Cross-platform support lacking (works on my machine™)
 
-### Performance Optimization Techniques
-- **Temporal Accumulation**: Exponential moving average reduces per-frame computation
-- **Adaptive Sampling**: Angular resolution scales with cascade distance range
-- **Band-Limited Capture**: Prevents aliasing and ensures stable convergence
-- **Separable Filtering**: Bilateral blur reduces noise while preserving edges
-- **Dynamic Quality**: Runtime cascade count adjustment for target frame rates
+## Technical Implementation Notes
 
-### Screen-Space Effects
-- **SSAO**: Hemisphere sampling with random rotation for contact shadows
-- **SSR**: Adaptive raymarching with binary search refinement
-- **TAA**: Motion vector reprojection with YCoCg color space variance clamping
-- **FXAA**: Subpixel edge detection with adaptive sampling
+### Radiance Cascades (Experimental)
+The implementation attempts to follow the paper's concepts:
 
-## Learning & Educational Value
+```
+Cascade 0: Finest detail, highest resolution
+Cascade 1: Medium detail, 3/4 resolution  
+Cascade 2: Broader lighting, 1/2 resolution
+Cascade 3+: Progressive LOD reduction
+```
 
-This project serves as a comprehensive learning resource for modern real-time rendering:
+**Issues**: Temporal stability, bandwidth problems, sampling artifacts.
 
-### Graphics Programming Concepts
-- **Global Illumination**: Multi-bounce indirect lighting simulation
-- **Temporal Methods**: History buffers and motion vector reprojection
-- **Screen-Space Techniques**: SSAO, SSR, and anti-aliasing algorithms
-- **Performance Optimization**: Quality scaling and frame timing analysis
-
-### Software Architecture
-- **Entity-Component-System**: Modern game engine architecture patterns
-- **Resource Management**: OpenGL buffer and texture lifecycle management
-- **Threading**: Asynchronous input processing for responsive controls
-- **Profiling**: Comprehensive performance measurement and optimization
-
-### Code Quality
-- **Extensive Documentation**: 500+ lines of technical comments
-- **Clean Architecture**: Modular design with clear separation of concerns
-- **Error Handling**: Comprehensive OpenGL error checking and resource cleanup
-- **Educational Comments**: Algorithm explanations and implementation notes
-
-## System Requirements
-
-### Minimum Requirements
-- **OpenGL**: 3.3+ compatible graphics card
-- **CPU**: Dual-core processor
-- **RAM**: 4GB system memory
-- **Resolution**: 720p display
-
-### Recommended Specifications
-- **GPU**: Dedicated graphics card with 2GB+ VRAM
-- **CPU**: Quad-core processor (Intel i5/AMD Ryzen 5 or better)
-- **RAM**: 8GB+ system memory
-- **Resolution**: 1080p+ display for optimal visual experience
-
-### Performance Expectations
-- **Integrated Graphics**: 30-45 FPS on Super Low/Performance settings
-- **Mid-Range GPU**: 45-60 FPS on Balanced/High settings
-- **High-End GPU**: 60+ FPS on Ultra settings with all effects enabled
+### Known Algorithm Problems
+- Angular sampling inconsistent across cascades
+- Temporal accumulation causes flickering
+- Distance range overlaps not handled well
+- Performance scaling poor with cascade count
+- Memory usage excessive
 
 ## Contributing & Experimentation
 
-The codebase is designed for experimentation and learning:
+**This is a vibe coding research project** - contributions welcome but expect:
+- Broken builds on some systems (builds are suggestions)
+- Frequent API changes (consistency is overrated)
+- Incomplete documentation (code is self-documenting, right?)
+- Performance issues (optimization is for quitters)
+- Shader compilation failures (shaders have feelings too)
+- Commits with messages like "it works now" or "fixed the thing"
+- Features that exist because they seemed cool at 2 AM
 
-- **Modular Shaders**: Easy to modify and experiment with rendering techniques
-- **Configurable Parameters**: Extensive runtime configuration for algorithm tuning
-- **Clear Documentation**: Well-commented code explains implementation details
-- **Educational Structure**: Progressive complexity from basic to advanced techniques
+**Contributing Guidelines:**
+- Does it compile? Ship it.
+- Does it look cool? Definitely ship it.
+- Performance regression? That's tomorrow's problem.
+- Breaking changes? Every change is a breaking change if you're brave enough.
 
-Feel free to experiment with:
-- **New GI Techniques**: Alternative global illumination algorithms
-- **Advanced Materials**: Extended PBR models and material properties
-- **Additional Effects**: Volumetrics, subsurface scattering, etc.
-- **Performance Optimizations**: Compute shaders, advanced culling, etc.
+Good for learning/experimentation, terrible for production use. Perfect for vibe coding.
 
-## Philosophy
+## Credits & References
 
-*"Advanced graphics programming with clarity and educational value."*
+**Original Paper**: "Radiance Cascades: A Novel Approach to Calculating Global Illumination [WIP]" by Alexander Sannikov
 
-Vibe-GI demonstrates that sophisticated rendering techniques can be implemented with clean, understandable code. The project balances technical advancement with educational accessibility, making modern graphics programming concepts approachable for developers at all levels.
+**Implementation**: Experimental research prototype exploring the paper's concepts
 
-## License
+**Third-party Libraries**:
+- OpenGL for rendering
+- GLFW for windowing
+- GLM for mathematics
+- ImGui for interface
+- stb_image for texture loading
 
-This project is open-source and available for educational and research purposes. See individual component licenses for specific terms. 
+## Disclaimer
+
+This software is provided "as-is" for educational, research, and **vibe coding experimentation** purposes. Expect bugs, crashes, performance issues, incomplete features, and questionable architectural decisions. This is definitely not production software.
+
+The implementation may not accurately reflect the original paper's intent or methodology, but it might look cool while failing. Built with the philosophy that "working software" is a social construct.
+
+Use at your own risk for learning and experimentation only. Side effects may include: appreciation for robust software engineering practices, existential questions about code quality, and an urge to refactor everything. 
