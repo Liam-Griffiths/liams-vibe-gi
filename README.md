@@ -21,6 +21,7 @@ This project is an experiment in **intuitive, exploratory programming** - implem
 
 This is a research prototype implementing concepts from Sannikov's paper. **Many features are incomplete, broken, or experimental.** This is not production-ready software.
 
+Captured on a Macbook Pro M1:
 https://github.com/user-attachments/assets/a51b0a0b-0d9b-4396-a30d-41c1cc8b7b08
 
 ## ⚠️ Current Status & Warnings
