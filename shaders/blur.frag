@@ -10,10 +10,14 @@ uniform int blurDirection; // 0 = horizontal, 1 = vertical
 void main() {
     vec4 centerSample = texture(inputTexture, TexCoords);
     vec3 centerPos = texture(gPosition, TexCoords).xyz;
-    // Reconstruct center normal from RG16F format
-    vec2 centerNormalXY = texture(gNormal, TexCoords).rg;
-    float centerNormalZ = sqrt(max(0.0, 1.0 - dot(centerNormalXY, centerNormalXY)));
-    vec3 centerNormal = normalize(vec3(centerNormalXY, centerNormalZ));
+    // Decode octahedral normal (center)
+    vec2 cenc = texture(gNormal, TexCoords).rg;
+    vec2 cf = cenc * 2.0 - 1.0;
+    vec3 cn = vec3(cf.x, cf.y, 1.0 - abs(cf.x) - abs(cf.y));
+    float ct = clamp(-cn.z, 0.0, 1.0);
+    cn.x += (cn.x >= 0.0 ? -ct : ct);
+    cn.y += (cn.y >= 0.0 ? -ct : ct);
+    vec3 centerNormal = normalize(cn);
     
     // Early exit for background pixels
     if (length(centerNormal) < 0.1) {
@@ -74,10 +78,14 @@ void main() {
         
         vec4 sampleData = texture(inputTexture, sampleCoord);
         vec3 samplePos = texture(gPosition, sampleCoord).xyz;
-                    // Reconstruct sample normal from RG16F format
-            vec2 sampleNormalXY = texture(gNormal, sampleCoord).rg;
-            float sampleNormalZ = sqrt(max(0.0, 1.0 - dot(sampleNormalXY, sampleNormalXY)));
-            vec3 sampleNormal = normalize(vec3(sampleNormalXY, sampleNormalZ));
+        // Decode octahedral normal (sample)
+        vec2 senc = texture(gNormal, sampleCoord).rg;
+        vec2 sf = senc * 2.0 - 1.0;
+        vec3 sn = vec3(sf.x, sf.y, 1.0 - abs(sf.x) - abs(sf.y));
+        float st = clamp(-sn.z, 0.0, 1.0);
+        sn.x += (sn.x >= 0.0 ? -st : st);
+        sn.y += (sn.y >= 0.0 ? -st : st);
+        vec3 sampleNormal = normalize(sn);
         
         // Skip background pixels
         if (length(sampleNormal) < 0.1) continue;

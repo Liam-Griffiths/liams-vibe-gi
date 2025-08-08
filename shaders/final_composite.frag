@@ -18,6 +18,7 @@ uniform vec3 lightColor;
 uniform vec3 viewPos;
 uniform mat4 lightSpaceMatrix;
 uniform mat4 view;
+uniform mat4 invView; // Precomputed inverse view from CPU
 uniform float lightRadius; // New: light size parameter
 
 // SSGI parameters
@@ -109,9 +110,14 @@ float calculateSoftAttenuation(float distance, float radius) {
 // Bilateral GI post-filter for outlier removal and ultra-smooth results
 vec3 bilateralGI(vec2 uv, vec3 centerGI) {
     vec3 centerPosition = texture(gPosition, uv).xyz;
-    vec2 centerNormalXY = texture(gNormal, uv).rg;
-    float centerNormalZ = sqrt(max(0.0, 1.0 - dot(centerNormalXY, centerNormalXY)));
-    vec3 centerNormal = normalize(vec3(centerNormalXY, centerNormalZ));
+    // Oct decode center normal
+    vec2 cenc = texture(gNormal, uv).rg;
+    vec2 cf = cenc * 2.0 - 1.0;
+    vec3 cn = vec3(cf.x, cf.y, 1.0 - abs(cf.x) - abs(cf.y));
+    float ct = clamp(-cn.z, 0.0, 1.0);
+    cn.x += (cn.x >= 0.0 ? -ct : ct);
+    cn.y += (cn.y >= 0.0 ? -ct : ct);
+    vec3 centerNormal = normalize(cn);
     
     vec3 C = vec3(0.0);
     float W = 0.0;
@@ -132,9 +138,13 @@ vec3 bilateralGI(vec2 uv, vec3 centerGI) {
             
             // Sample neighbor properties
             vec3 samplePosition = texture(gPosition, sampleUV).xyz;
-            vec2 sampleNormalXY = texture(gNormal, sampleUV).rg;
-            float sampleNormalZ = sqrt(max(0.0, 1.0 - dot(sampleNormalXY, sampleNormalXY)));
-            vec3 sampleNormal = normalize(vec3(sampleNormalXY, sampleNormalZ));
+            vec2 senc = texture(gNormal, sampleUV).rg;
+            vec2 sf = senc * 2.0 - 1.0;
+            vec3 sn = vec3(sf.x, sf.y, 1.0 - abs(sf.x) - abs(sf.y));
+            float st = clamp(-sn.z, 0.0, 1.0);
+            sn.x += (sn.x >= 0.0 ? -st : st);
+            sn.y += (sn.y >= 0.0 ? -st : st);
+            vec3 sampleNormal = normalize(sn);
             
             // Sample GI from the same cascade structure as the center pixel
             vec3 sampleGI = vec3(0.0);
@@ -175,10 +185,14 @@ vec3 bilateralGI(vec2 uv, vec3 centerGI) {
 void main()
 {
     vec3 position = texture(gPosition, TexCoords).xyz;
-    // Reconstruct normal from RG16F format
-    vec2 normalXY = texture(gNormal, TexCoords).rg;
-    float normalZ = sqrt(max(0.0, 1.0 - dot(normalXY, normalXY)));
-    vec3 normal = normalize(vec3(normalXY, normalZ));
+    // Decode octahedral normal
+    vec2 encN = texture(gNormal, TexCoords).rg;
+    vec2 fn = encN * 2.0 - 1.0;
+    vec3 nrm = vec3(fn.x, fn.y, 1.0 - abs(fn.x) - abs(fn.y));
+    float tn = clamp(-nrm.z, 0.0, 1.0);
+    nrm.x += (nrm.x >= 0.0 ? -tn : tn);
+    nrm.y += (nrm.y >= 0.0 ? -tn : tn);
+    vec3 normal = normalize(nrm);
     vec3 albedo = texture(gAlbedo, TexCoords).rgb;
     
     // Early exit for background pixels
@@ -190,8 +204,8 @@ void main()
     vec3 fragPos = position; // Already in view space
     vec3 worldNormal = normalize(normal); // Already in view space
     
-    // Transform to world space for shadow calculation
-    vec4 fragPosLightSpace = lightSpaceMatrix * inverse(view) * vec4(fragPos, 1.0);
+    // Transform to world space for shadow calculation using precomputed inverse view
+    vec4 fragPosLightSpace = lightSpaceMatrix * invView * vec4(fragPos, 1.0);
     
     // Light direction in view space
     vec3 lightDir = normalize((view * vec4(lightPos, 1.0)).xyz - fragPos);
@@ -253,9 +267,13 @@ void main()
         
         vec2 texelSize = 1.0 / textureSize(gPosition, 0);
         vec3 centerPosition = texture(gPosition, TexCoords).xyz;
-        vec2 centerNormalXY = texture(gNormal, TexCoords).rg;
-        float centerNormalZ = sqrt(max(0.0, 1.0 - dot(centerNormalXY, centerNormalXY)));
-        vec3 centerNormal = normalize(vec3(centerNormalXY, centerNormalZ));
+        vec2 centerEnc = texture(gNormal, TexCoords).rg;
+        vec2 cfn = centerEnc * 2.0 - 1.0;
+        vec3 cnrm = vec3(cfn.x, cfn.y, 1.0 - abs(cfn.x) - abs(cfn.y));
+        float ctn = clamp(-cnrm.z, 0.0, 1.0);
+        cnrm.x += (cnrm.x >= 0.0 ? -ctn : ctn);
+        cnrm.y += (cnrm.y >= 0.0 ? -ctn : ctn);
+        vec3 centerNormal = normalize(cnrm);
         
         // Large sampling pattern for interpolation
         vec2 interpolationSamples[12] = vec2[](
@@ -271,9 +289,13 @@ void main()
             if (sampleCoord.x >= 0.0 && sampleCoord.x <= 1.0 && sampleCoord.y >= 0.0 && sampleCoord.y <= 1.0) {
                 // Sample neighbor position and normal from G-buffer
                 vec3 neighborPosition = texture(gPosition, sampleCoord).xyz;
-                vec2 neighborNormalXY = texture(gNormal, sampleCoord).rg;
-                float neighborNormalZ = sqrt(max(0.0, 1.0 - dot(neighborNormalXY, neighborNormalXY)));
-                vec3 neighborNormal = normalize(vec3(neighborNormalXY, neighborNormalZ));
+                vec2 nenc = texture(gNormal, sampleCoord).rg;
+                vec2 nf = nenc * 2.0 - 1.0;
+                vec3 nn = vec3(nf.x, nf.y, 1.0 - abs(nf.x) - abs(nf.y));
+                float nt = clamp(-nn.z, 0.0, 1.0);
+                nn.x += (nn.x >= 0.0 ? -nt : nt);
+                nn.y += (nn.y >= 0.0 ? -nt : nt);
+                vec3 neighborNormal = normalize(nn);
                 
                 // Sample neighbor GI from cascade 0 (highest quality)
                 vec4 neighborData = texture(rcTexture[0], sampleCoord);
@@ -329,11 +351,11 @@ void main()
     // Add ambient term - increased for brighter scene
     vec3 ambientColor = vec3(1.0, 1.0, 1.0); // White ambient light
     // Reduce SSAO influence on ambient since ambient light is more diffuse
-    float ambientAO = mix(1.0, ambientOcclusion, 0.3); // Only 30% SSAO influence
-    vec3 ambient = ambientStrength * 4.0 * ambientColor * albedo * ambientAO; // Increased ambient multiplier
+    float ambientAO = mix(1.0, ambientOcclusion, 0.15); // Reduce AO effect on ambient even further
+    vec3 ambient = ambientStrength * 3.0 * ambientColor * albedo * ambientAO; // Slightly lower ambient gain
     
-    // Apply SSAO to indirect lighting for more realistic contact shadows
-    indirectDiffuse *= mix(1.0, ambientOcclusion, ssaoStrength);
+    // Apply SSAO mildly to indirect lighting to avoid crushing
+    indirectDiffuse *= mix(1.0, ambientOcclusion, ssaoStrength * 0.5);
     diffuseContribution = (directDiffuse + indirectDiffuse) * albedo;
     
     // Combine final lighting: diffuse (with albedo and AO) + specular (without albedo) + ambient (with AO)

@@ -200,6 +200,7 @@ struct InputData {
     std::atomic<bool> antiAliasingToggle{false}; // C key - cycle AA modes
     std::atomic<bool> showPerformance{false};  // X key - show performance breakdown
     std::atomic<bool> cullingToggle{false};    // J key - toggle frustum culling
+    std::atomic<bool> samplingToggle{false};   // ? key - cycle sampling methods
     
     // Scene selection (1-6 keys)
     std::atomic<int> sceneSelection{-1};       // -1 = no selection, 0-5 = scene index
@@ -300,7 +301,11 @@ void inputProcessingThread(GLFWwindow* window, InputData& inputData, std::atomic
         lastC = currentC;
         
         bool currentX = glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS;
+        bool currentQuestion = glfwGetKey(window, GLFW_KEY_SLASH) == GLFW_PRESS; // '?' is usually shift + '/'
         if (!lastX && currentX) inputData.showPerformance = true;
+        static bool lastQuestion = false;
+        if (!lastQuestion && currentQuestion) inputData.samplingToggle = true;
+        lastQuestion = currentQuestion;
         lastX = currentX;
         
         bool currentJ = glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS;
@@ -431,7 +436,31 @@ int main() {
         float pausedTime = 0.0f;        // Time accumulator for pause system
         int antiAliasingMode = 2;       // AA mode: 0=none, 1=FXAA, 2=TAA (default TAA)
         int qualityLevel = 1;           // Quality level: 0=super low, 1=performance, 2=balanced, 3=high, 4=ultra (default: Performance for better FPS)
-        bool cullingEnabled = false;    // Toggle for frustum culling (default off until debugging is complete)
+        bool cullingEnabled = false;    // Leave frustum culling off by default (avoid false negatives)
+
+        // Sampling method state
+        enum SamplingMethod {
+            CUBE_FACE_SUBDIVISION = 0,
+            LATLON_SUBDIVISION,
+            GOLDEN_SPIRAL,
+            KOGAN_SPIRAL,
+            GOLDEN_HEMISPHERE,
+            RANDOM_HEMISPHERE,
+            UNIFORM_RANDOM_HEMISPHERE, // default
+            UNIFORM_HEMISPHERE,
+            SAMPLING_METHOD_COUNT
+        };
+        int samplingMethod = UNIFORM_RANDOM_HEMISPHERE;
+        const char* samplingNames[] = {
+            "Cube Face Subdivision",
+            "Lat/Lon Subdivision",
+            "Golden Spiral",
+            "Kogan Spiral",
+            "Golden Hemisphere",
+            "Random Hemisphere",
+            "Uniform Random Hemisphere",
+            "Uniform Hemisphere"
+        };
 
         // Culling statistics
         int totalEntities = 0;          // Total entities in scene
@@ -498,6 +527,7 @@ int main() {
             static std::string cachedCameraPosText = "Camera: (0.0, 0.0, 0.0)";
             static std::string cachedSceneText = "Scene: Cornell Box";
             static std::string cachedCullingText = "Culling: ON (0/0)";
+            static std::string cachedSamplingText = "Sampling: Uniform Random Hemisphere";
             uiFrameCounter++;
             
             profiler.beginTimer("input_processing");
@@ -535,6 +565,9 @@ int main() {
                 antiAliasingMode = (antiAliasingMode + 1) % 3; // Cycle: None -> FXAA -> TAA -> None
                 std::string aaNames[] = {"None", "FXAA", "TAA"};
                 cachedAaStatusText = "AA: " + aaNames[antiAliasingMode];
+            }
+            if (inputData.samplingToggle.exchange(false)) {
+                samplingMethod = (samplingMethod + 1) % SAMPLING_METHOD_COUNT;
             }
             if (inputData.cullingToggle.exchange(false)) {
                 cullingEnabled = !cullingEnabled;
@@ -742,7 +775,7 @@ int main() {
                         bool shouldRender = true;
                         if (cullingEnabled) {
                             glm::vec3 center = transform->getBoundingCenter();
-                            float radius = transform->getBoundingRadius(5.0f);
+                            float radius = transform->getBoundingRadius(15.0f); // generous radius to avoid over-cull
                             shouldRender = scene.camera.isSphereInFrustum(center, radius);
                         }
                         
@@ -788,9 +821,9 @@ int main() {
                     // Frustum culling check (if enabled)
                     bool shouldRender = true;
                     if (cullingEnabled) {
-                        // Calculate bounding sphere for this entity
+                        // Calculate bounding sphere for this entity (larger base radius + margin)
                         glm::vec3 center = transformComp->getBoundingCenter();
-                        float radius = transformComp->getBoundingRadius(5.0f); // Very conservative base radius
+                        float radius = transformComp->getBoundingRadius(15.0f) + 2.0f; // margin
                         
                         // Check if entity is in camera frustum
                         shouldRender = scene.camera.isSphereInFrustum(center, radius);
@@ -886,6 +919,21 @@ int main() {
                 rcShader.setFloat("lightRadius", lightRadius);   // Light attenuation radius
                 rcShader.setFloat("time", glfwGetTime());         // Time for temporal effects
                 rcShader.setInt("activeCascades", activeCascades); // Dynamic cascade count for quality-aware computation
+                // Quality-dependent ray-march steps and angular samples base
+                int raySteps = 6;
+                int nearAngular = 32;
+                int farAngular = 8;
+                switch (qualityLevel) {
+                    case 0: raySteps = 3; nearAngular = 20; farAngular = 6; break;   // Super Low
+                    case 1: raySteps = 4; nearAngular = 28; farAngular = 8; break;   // Performance
+                    case 2: raySteps = 6; nearAngular = 36; farAngular = 10; break;  // Balanced
+                    case 3: raySteps = 8; nearAngular = 48; farAngular = 12; break;  // High
+                    case 4: raySteps = 10; nearAngular = 60; farAngular = 14; break; // Ultra
+                }
+                rcShader.setInt("rayMarchSteps", raySteps);
+                rcShader.setInt("samplingMethod", samplingMethod);
+                // Also update band-limiting parameters for this session
+                rc.setBandLimitingParameters(nearAngular, farAngular, 0.6f);
                 profiler.endTimer("gi_setup");
                 
                 profiler.beginTimer("gi_compute");
@@ -937,6 +985,7 @@ int main() {
             compositeShader.use();
             compositeShader.setMat4("view", view);
             compositeShader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
+            compositeShader.setMat4("invView", glm::inverse(view));
             compositeShader.setVec3("lightPos", lightPos);
             compositeShader.setVec3("lightColor", lightColor);
             compositeShader.setVec3("viewPos", scene.camera.position);
@@ -1098,6 +1147,7 @@ int main() {
                 cachedGiStatusText = "GI: " + std::string(giEnabled ? "ON" : "OFF");
                 cachedSsaoStatusText = "SSAO: " + std::string(ssaoEnabled ? "ON" : "OFF");
                 cachedSceneText = "Scene: " + scene.getSceneName(scene.currentScene);
+                cachedSamplingText = std::string("Sampling: ") + samplingNames[samplingMethod];
             }
             profiler.endTimer("ui_cache_update");
             
@@ -1120,11 +1170,13 @@ int main() {
                 ImGui::Text("C: Cycle AA, Z: Quality, J: Toggle Culling");
                 ImGui::Text("X: Show Performance, Arrow Keys: Move Light");
                 ImGui::Text("K/L: Light Height, O/P: Intensity, I/U: Radius");
+                ImGui::Text("?: Cycle Sampling");
                 
                 ImGui::Separator();
                 
                 // Camera position display
                 ImGui::TextColored(ImVec4(0.8f, 0.8f, 1.0f, 1.0f), "%s", cachedCameraPosText.c_str());
+                ImGui::Text("%s", cachedSamplingText.c_str());
                 
                 // Culling statistics display
                 ImGui::TextColored(cullingEnabled ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", cachedCullingText.c_str());

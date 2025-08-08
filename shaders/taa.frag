@@ -87,6 +87,11 @@ void main() {
     // Sample history frame with high-quality filtering
     vec3 historyColor = sampleCatmullRom(historyFrame, prevUV, textureSize(historyFrame, 0));
     
+    // Simple disocclusion test using depth difference
+    float currentDepth = texture(gPosition, TexCoords).z;
+    float historyDepth = texture(gPosition, prevUV).z;
+    bool disoccluded = abs(currentDepth - historyDepth) > 0.02;
+
     // Convert to YCoCg for better temporal stability
     vec3 currentYCoCg = RGB2YCoCg(currentColor);
     vec3 historyYCoCg = RGB2YCoCg(historyColor);
@@ -131,6 +136,12 @@ void main() {
     // Combine factors for final blend weight
     float blendFactor = max(max(velocityFactor, lumaFactor), clampFactor);
     blendFactor = mix(MIN_BLEND_FACTOR, MAX_BLEND_FACTOR, blendFactor);
+
+    // Force current if disoccluded
+    if (disoccluded) {
+        FragColor = vec4(currentColor, 1.0);
+        return;
+    }
     
     // For the first few frames, use higher blend factor to establish history
     if (frameCounter < 15.0) {

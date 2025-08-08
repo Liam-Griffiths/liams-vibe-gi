@@ -203,6 +203,7 @@ std::unique_ptr<Mesh> Mesh::createCube() {
 std::unique_ptr<Mesh> Mesh::loadFromOBJ(const std::string& filepath) {
     std::vector<glm::vec3> temp_vertices;
     std::vector<glm::vec3> temp_normals;
+    std::vector<glm::vec2> temp_texcoords;
     std::vector<Vertex> final_vertices;
     
     std::ifstream file(filepath);
@@ -229,6 +230,12 @@ std::unique_ptr<Mesh> Mesh::loadFromOBJ(const std::string& filepath) {
             iss >> normal.x >> normal.y >> normal.z;
             temp_normals.push_back(normal);
         }
+        else if (prefix == "vt") {
+            // Texture coordinate
+            glm::vec2 uv;
+            iss >> uv.x >> uv.y;
+            temp_texcoords.push_back(uv);
+        }
         else if (prefix == "f") {
             // Face (assuming triangulated faces)
             std::string vertex1, vertex2, vertex3;
@@ -237,6 +244,7 @@ std::unique_ptr<Mesh> Mesh::loadFromOBJ(const std::string& filepath) {
             // Parse each vertex (format: v/vt/vn or v//vn or just v)
             for (const std::string& vertexStr : {vertex1, vertex2, vertex3}) {
                 int vertexIndex = -1;
+                int texcoordIndex = -1;
                 int normalIndex = -1;
                 
                 // Check if the vertex string contains slashes (v/vt/vn format)
@@ -248,8 +256,10 @@ std::unique_ptr<Mesh> Mesh::loadFromOBJ(const std::string& filepath) {
                     std::getline(vertexStream, component, '/');
                     vertexIndex = std::stoi(component) - 1; // OBJ is 1-indexed
                     
-                    // Skip texture coordinate
-                    std::getline(vertexStream, component, '/');
+                    // Get texture coordinate index if present
+                    if (std::getline(vertexStream, component, '/')) {
+                        if (!component.empty()) texcoordIndex = std::stoi(component) - 1;
+                    }
                     
                     // Get normal index
                     if (std::getline(vertexStream, component, '/') && !component.empty()) {
@@ -275,8 +285,12 @@ std::unique_ptr<Mesh> Mesh::loadFromOBJ(const std::string& filepath) {
                     vertex.Normal = glm::vec3(0.0f, 1.0f, 0.0f);
                 }
                 
-                // Set default texture coordinates and tangents (could be improved)
-                vertex.TexCoords = glm::vec2(0.0f);
+                // Set texture coordinates if present
+                if (texcoordIndex >= 0 && texcoordIndex < temp_texcoords.size()) {
+                    vertex.TexCoords = temp_texcoords[texcoordIndex];
+                } else {
+                    vertex.TexCoords = glm::vec2(0.0f);
+                }
                 vertex.Tangent = glm::vec3(1.0f, 0.0f, 0.0f);
                 vertex.Bitangent = glm::vec3(0.0f, 0.0f, 1.0f);
                 

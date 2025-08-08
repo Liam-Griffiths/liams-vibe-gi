@@ -21,56 +21,30 @@ glm::mat4 Camera::getViewMatrix() const {
 }
 
 void Camera::updateFrustum(const glm::mat4& projectionMatrix) {
-    // Calculate view-projection matrix
-    glm::mat4 viewMatrix = getViewMatrix();
-    glm::mat4 viewProjection = projectionMatrix * viewMatrix;
-    
-    // Extract frustum planes from view-projection matrix
-    // The frustum planes are extracted from the combined view-projection matrix
-    // using the method described in "Fast Extraction of Viewing Frustum Planes from the World-View-Projection Matrix"
-    
-    // Left plane
-    currentFrustum.planes[0].normal.x = viewProjection[0][3] + viewProjection[0][0];
-    currentFrustum.planes[0].normal.y = viewProjection[1][3] + viewProjection[1][0];
-    currentFrustum.planes[0].normal.z = viewProjection[2][3] + viewProjection[2][0];
-    currentFrustum.planes[0].distance = viewProjection[3][3] + viewProjection[3][0];
-    
-    // Right plane
-    currentFrustum.planes[1].normal.x = viewProjection[0][3] - viewProjection[0][0];
-    currentFrustum.planes[1].normal.y = viewProjection[1][3] - viewProjection[1][0];
-    currentFrustum.planes[1].normal.z = viewProjection[2][3] - viewProjection[2][0];
-    currentFrustum.planes[1].distance = viewProjection[3][3] - viewProjection[3][0];
-    
-    // Bottom plane
-    currentFrustum.planes[2].normal.x = viewProjection[0][3] + viewProjection[0][1];
-    currentFrustum.planes[2].normal.y = viewProjection[1][3] + viewProjection[1][1];
-    currentFrustum.planes[2].normal.z = viewProjection[2][3] + viewProjection[2][1];
-    currentFrustum.planes[2].distance = viewProjection[3][3] + viewProjection[3][1];
-    
-    // Top plane
-    currentFrustum.planes[3].normal.x = viewProjection[0][3] - viewProjection[0][1];
-    currentFrustum.planes[3].normal.y = viewProjection[1][3] - viewProjection[1][1];
-    currentFrustum.planes[3].normal.z = viewProjection[2][3] - viewProjection[2][1];
-    currentFrustum.planes[3].distance = viewProjection[3][3] - viewProjection[3][1];
-    
-    // Near plane
-    currentFrustum.planes[4].normal.x = viewProjection[0][3] + viewProjection[0][2];
-    currentFrustum.planes[4].normal.y = viewProjection[1][3] + viewProjection[1][2];
-    currentFrustum.planes[4].normal.z = viewProjection[2][3] + viewProjection[2][2];
-    currentFrustum.planes[4].distance = viewProjection[3][3] + viewProjection[3][2];
-    
-    // Far plane
-    currentFrustum.planes[5].normal.x = viewProjection[0][3] - viewProjection[0][2];
-    currentFrustum.planes[5].normal.y = viewProjection[1][3] - viewProjection[1][2];
-    currentFrustum.planes[5].normal.z = viewProjection[2][3] - viewProjection[2][2];
-    currentFrustum.planes[5].distance = viewProjection[3][3] - viewProjection[3][2];
-    
-    // Normalize all planes
-    for (auto& plane : currentFrustum.planes) {
-        float length = glm::length(plane.normal);
-        plane.normal /= length;
-        plane.distance /= length;
-    }
+    // Correct frustum plane extraction using column vectors (GLM is column-major)
+    const glm::mat4 viewProjection = projectionMatrix * getViewMatrix();
+
+    const glm::vec4 c0 = viewProjection[0]; // column 0
+    const glm::vec4 c1 = viewProjection[1]; // column 1
+    const glm::vec4 c2 = viewProjection[2]; // column 2
+    const glm::vec4 c3 = viewProjection[3]; // column 3
+
+    auto setPlane = [&](int idx, const glm::vec4& p) {
+        glm::vec3 n(p.x, p.y, p.z);
+        float d = p.w; // plane equation: dot(n,x) + d = 0
+        float invLen = 1.0f / glm::length(n);
+        currentFrustum.planes[idx].normal = n * invLen;
+        // Our Plane uses dot(normal, point) - distance >= 0, so store distance = -d
+        currentFrustum.planes[idx].distance = (-d) * invLen;
+    };
+
+    // Left, Right, Bottom, Top, Near, Far
+    setPlane(0, c3 + c0);
+    setPlane(1, c3 - c0);
+    setPlane(2, c3 + c1);
+    setPlane(3, c3 - c1);
+    setPlane(4, c3 + c2);
+    setPlane(5, c3 - c2);
 }
 
 bool Camera::isSphereInFrustum(const glm::vec3& center, float radius) const {

@@ -1,6 +1,6 @@
 #version 330 core
 layout (location = 0) out vec3 gPosition;
-layout (location = 1) out vec2 gNormal;
+layout (location = 1) out vec2 gNormal; // Octahedral-encoded normal
 layout (location = 2) out vec4 gAlbedo;
 layout (location = 3) out float gLinearDepth;
 layout (location = 4) out vec2 gVelocity; // New: motion vector output
@@ -101,6 +101,17 @@ vec2 parallaxOcclusionMapping(vec2 texCoords, vec3 viewDir) {
     return finalTexCoords;
 }
 
+// Octahedral encoding/decoding utilities
+vec2 octEncode(vec3 n) {
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    vec2 enc = n.xy;
+    if (n.z < 0.0) {
+        enc = (1.0 - abs(enc.yx)) * sign(enc.xy);
+    }
+    // Map from [-1,1] to [0,1]
+    return enc * 0.5 + 0.5;
+}
+
 void main()
 {    
     // Store the fragment position in view space (more suitable for SSGI)
@@ -131,7 +142,8 @@ void main()
     } else {
         normal = normalize(ViewNormal);
     }
-    gNormal = normal.xy; // Store only X,Y - Z can be reconstructed
+    // Store octahedral-encoded normal in RG16F
+    gNormal = octEncode(normal);
     
     // Calculate albedo (either from texture or material/object color)
     vec3 albedo;

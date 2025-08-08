@@ -10,21 +10,25 @@ uniform sampler2D texNoise;
 uniform vec3 samples[32];
 uniform mat4 projection;
 
-// Optimized SSAO parameters for better performance/quality balance
-const int kernelSize = 16;       // Reduced from 32 to 16 for ~2x performance improvement
-const float radius = 0.8;        // Slightly reduced radius for better locality
-const float bias = 0.008;        // Adjusted bias for fewer samples
-const float intensity = 1.8;     // Increased intensity to compensate for fewer samples
+// SSAO parameters tuned to avoid over-darkening
+const int kernelSize = 16;
+const float radius = 0.6;        // Smaller radius to limit large-scale darkening
+const float bias = 0.020;        // Larger bias to reduce false occlusion
+const float intensity = 1.0;     // Neutral curve (less aggressive darkening)
 
 void main()
 {
     // Get input for SSAO algorithm
     vec3 fragPos = texture(gPosition, TexCoords).xyz;
     
-    // Reconstruct normal from RG16F format
-    vec2 normalXY = texture(gNormal, TexCoords).rg;
-    float normalZ = sqrt(max(0.0, 1.0 - dot(normalXY, normalXY)));
-    vec3 normal = normalize(vec3(normalXY, normalZ));
+    // Decode octahedral normal
+    vec2 enc = texture(gNormal, TexCoords).rg;
+    vec2 f = enc * 2.0 - 1.0;
+    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    float t = clamp(-n.z, 0.0, 1.0);
+    n.x += (n.x >= 0.0 ? -t : t);
+    n.y += (n.y >= 0.0 ? -t : t);
+    vec3 normal = normalize(n);
     
     // Early exit optimizations for better performance
     // Skip SSAO for very far objects to improve performance
@@ -83,10 +87,10 @@ void main()
     
     // Normalize and apply intensity
     occlusion = 1.0 - (occlusion / kernelSize);
-    occlusion = pow(occlusion, intensity); // Apply intensity curve
-    
-    // Ensure we don't go completely black
-    occlusion = max(occlusion, 0.1);
+    occlusion = pow(occlusion, intensity);
+
+    // Floor the AO so it never crushes the scene
+    occlusion = max(occlusion, 0.5);
     
     FragColor = occlusion;
 } 

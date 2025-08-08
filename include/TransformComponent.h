@@ -92,7 +92,7 @@ public:
         
         // Apply a conservative multiplier (sqrt(3) accounts for diagonal extent)
         // This ensures the sphere contains the entire object even when rotated
-        return baseRadius * maxScale * 1.732f; // sqrt(3) ≈ 1.732
+        return baseRadius * maxScale * 2.5f; // add safety margin to avoid over-culling
     }
     
     /**

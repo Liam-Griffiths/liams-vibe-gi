@@ -6,8 +6,8 @@
 
 class ShadowMap {
 public:
-    static const unsigned int SHADOW_WIDTH = 16384;  // Ultra-high quality shadows
-    static const unsigned int SHADOW_HEIGHT = 16384; // Ultra-high quality shadows
+    static const unsigned int SHADOW_WIDTH = 4096;   // High quality shadows (was 16384)
+    static const unsigned int SHADOW_HEIGHT = 4096;  // High quality shadows (was 16384)
     
     unsigned int depthMapFBO;
     unsigned int depthMap;

@@ -16,9 +16,14 @@ void main()
     // Get center values for bilateral filtering
     float centerOcclusion = texture(ssaoInput, TexCoords).r;
     vec3 centerPosition = texture(gPosition, TexCoords).xyz;
-    vec2 centerNormalXY = texture(gNormal, TexCoords).rg;
-    float centerNormalZ = sqrt(max(0.0, 1.0 - dot(centerNormalXY, centerNormalXY)));
-    vec3 centerNormal = normalize(vec3(centerNormalXY, centerNormalZ));
+    // Decode octahedral normal for center
+    vec2 cenc = texture(gNormal, TexCoords).rg;
+    vec2 cf = cenc * 2.0 - 1.0;
+    vec3 cn = vec3(cf.x, cf.y, 1.0 - abs(cf.x) - abs(cf.y));
+    float ct = clamp(-cn.z, 0.0, 1.0);
+    cn.x += (cn.x >= 0.0 ? -ct : ct);
+    cn.y += (cn.y >= 0.0 ? -ct : ct);
+    vec3 centerNormal = normalize(cn);
     
     // Bilateral blur with edge preservation
     for (int x = -2; x <= 2; ++x) 
@@ -36,9 +41,14 @@ void main()
             
             float sampleOcclusion = texture(ssaoInput, sampleCoord).r;
             vec3 samplePosition = texture(gPosition, sampleCoord).xyz;
-            vec2 sampleNormalXY = texture(gNormal, sampleCoord).rg;
-            float sampleNormalZ = sqrt(max(0.0, 1.0 - dot(sampleNormalXY, sampleNormalXY)));
-            vec3 sampleNormal = normalize(vec3(sampleNormalXY, sampleNormalZ));
+            // Decode octahedral normal for sample
+            vec2 senc = texture(gNormal, sampleCoord).rg;
+            vec2 sf = senc * 2.0 - 1.0;
+            vec3 sn = vec3(sf.x, sf.y, 1.0 - abs(sf.x) - abs(sf.y));
+            float st = clamp(-sn.z, 0.0, 1.0);
+            sn.x += (sn.x >= 0.0 ? -st : st);
+            sn.y += (sn.y >= 0.0 ? -st : st);
+            vec3 sampleNormal = normalize(sn);
             
             // Calculate weights based on depth and normal similarity
             float depthWeight = 1.0 / (1.0 + abs(centerPosition.z - samplePosition.z) * 10.0);

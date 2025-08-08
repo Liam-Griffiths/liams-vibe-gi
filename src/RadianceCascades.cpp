@@ -59,7 +59,7 @@ void RadianceCascades::setupCascades() {
         // ENHANCED CASCADE RESOLUTIONS for ultra-smooth GI
         int res_x, res_y;
         if (i == 0) {
-            // Cascade 0: FULL resolution for maximum near-field detail (like 32x32 cubemap equivalent)
+            // Cascade 0: high resolution but keep 16F to reduce bandwidth and match temporals
             res_x = screenWidth;
             res_y = screenHeight;
         } else if (i == 1) {
@@ -79,9 +79,9 @@ void RadianceCascades::setupCascades() {
         cascadeHeights[i] = res_y;
 
         glBindTexture(GL_TEXTURE_2D, cascadeTextures[i]);
-        // Use 16-bit precision for better performance, 32-bit for cascade 0
-        GLenum internalFormat = (i == 0) ? GL_RGBA32F : GL_RGBA16F; // Full precision for cascade 0
-        GLenum dataType = (i == 0) ? GL_FLOAT : GL_HALF_FLOAT;
+        // Use 16-bit precision for all cascades for bandwidth; avoids format conversion on blits
+        GLenum internalFormat = GL_RGBA16F;
+        GLenum dataType = GL_HALF_FLOAT;
         glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, res_x, res_y, 0, GL_RGBA, dataType, NULL);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -237,7 +237,7 @@ void RadianceCascades::setupTemporalBuffers() {
 void RadianceCascades::blur(Shader& blurShader, int activeCascades) {
     if (activeCascades == -1) activeCascades = numCascades; // Use all cascades by default
     blurShader.use();
-    FullscreenQuad quad;
+    static FullscreenQuad quad; // Reuse across calls to avoid VAO/VBO churn
     
     // Apply blur to active cascades for consistent smoothing
     for (int i = 0; i < activeCascades; ++i) {
@@ -381,7 +381,7 @@ void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm:
     shader.setInt("gEmission", 6); // Add emission texture for GI calculations (avoid conflict with previousCascade)
     
     bindForReading();
-    FullscreenQuad quad;
+    static FullscreenQuad quad; // Reuse
     
     for (int i = activeCascades - 1; i >= 0; --i) {
         int res_x = cascadeWidths[i];
@@ -393,30 +393,22 @@ void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm:
         glClear(GL_COLOR_BUFFER_BIT);
         
         shader.setInt("cascadeIndex", i);
-        
-        // TUNED CASCADE PARAMETERS for ultra-smooth GI
-        // 1. Shrink near-field range (halve t₀) and use tighter progression
-        float baseDistance = (i == 0) ? 0.5f : pow(1.8f, float(i)); // Cascade 0: 0.5-0.9, much tighter near-field
-        shader.setFloat("minDistance", baseDistance + 0.01f);
-        shader.setFloat("maxDistance", baseDistance * 1.8f); // Smaller multiplier for better overlap
-        
-        // 2. Optimized angular resolution for better performance/quality balance
-        int angularSamples;
-        if (i == 0) {
-            angularSamples = 48; // Reduced from 64 to 48 for better performance
-        } else if (i == 1) {
-            angularSamples = 32; // Reduced from 48 to 32
-        } else if (i == 2) {
-            angularSamples = 24; // Reduced from 32 to 24
-        } else {
-            angularSamples = std::max(12, 28 - i * 4); // Gradual taper: 20, 16, 12...
-        }
-        shader.setInt("angularSamples", angularSamples);
-        
-        // 3. Add cascade overlap parameters for blending
-        shader.setFloat("cascadeOverlapStart", baseDistance * 0.85f); // 15% overlap region start
-        shader.setFloat("cascadeOverlapEnd", baseDistance * 1.15f);   // 15% overlap region end
-        shader.setBool("enableCascadeBlending", i > 0); // Enable blending for all cascades except the first
+        // Band-limited cascade parameters from precomputed ranges
+        glm::vec2 distRange = getCascadeDistanceRange(i);
+        float minDistance = distRange.x;
+        float maxDistance = distRange.y;
+        shader.setFloat("minDistance", minDistance);
+        shader.setFloat("maxDistance", maxDistance);
+
+        // Angular samples from precomputed cascade settings
+        shader.setInt("angularSamples", cascadeAngularSamples[i]);
+
+        // Controlled overlap window (~15%) for smooth inter-cascade blending
+        float overlapStart = glm::mix(minDistance, maxDistance, 0.85f);
+        float overlapEnd   = glm::mix(minDistance, maxDistance, 1.00f);
+        shader.setFloat("cascadeOverlapStart", overlapStart);
+        shader.setFloat("cascadeOverlapEnd", overlapEnd);
+        shader.setBool("enableCascadeBlending", i > 0);
         
         // Bind previous cascade (spatial hierarchy)
         if (i < numCascades - 1) {
@@ -618,7 +610,7 @@ void RadianceCascades::computeSSAO(Shader& ssaoShader, const glm::mat4& projecti
     glBindTexture(GL_TEXTURE_2D, noiseTexture);
     ssaoShader.setInt("texNoise", 2);
     
-    FullscreenQuad quad;
+    static FullscreenQuad quad; // Reuse
     quad.render();
     
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -645,7 +637,7 @@ void RadianceCascades::blurSSAO(Shader& blurShader) {
     glBindTexture(GL_TEXTURE_2D, gNormal);
     blurShader.setInt("gNormal", 2);
     
-    FullscreenQuad quad;
+    static FullscreenQuad quad; // Reuse
     quad.render();
     
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -720,7 +712,7 @@ void RadianceCascades::computeSSR(Shader& ssrShader, unsigned int colorTexture, 
     glBindTexture(GL_TEXTURE_2D, colorTexture);
     ssrShader.setInt("colorTexture", 3);
     
-    FullscreenQuad quad;
+    static FullscreenQuad quad; // Reuse
     quad.render();
     
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
