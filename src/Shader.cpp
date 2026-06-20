@@ -5,7 +5,7 @@
 #include <sstream>
 #include <iostream>
 #include <GLFW/glfw3.h> // For OpenGL types
-#include <OpenGL/gl3.h>
+#include "../include/GLHeaders.h"
 
 Shader::Shader(const char* vertexPath, const char* fragmentPath) {
     // 1. retrieve the vertex/fragment source code from filePath

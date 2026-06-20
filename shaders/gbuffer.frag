@@ -1,4 +1,4 @@
-#version 330 core
+#version 430 core
 layout (location = 0) out vec3 gPosition;
 layout (location = 1) out vec2 gNormal; // Octahedral-encoded normal
 layout (location = 2) out vec4 gAlbedo;

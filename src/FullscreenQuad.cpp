@@ -1,6 +1,6 @@
 #include "../include/FullscreenQuad.h"
 #include <GLFW/glfw3.h>
-#include <OpenGL/gl3.h>
+#include "../include/GLHeaders.h"
 
 FullscreenQuad::FullscreenQuad() {
     setupQuad();

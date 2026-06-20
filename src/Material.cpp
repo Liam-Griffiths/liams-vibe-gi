@@ -1,6 +1,6 @@
 #include "../include/Material.h"
 #include <iostream>
-#include <OpenGL/gl3.h>
+#include "../include/GLHeaders.h"
 
 // You might need to install stb_image, for now I'll add a simple version
 #define STB_IMAGE_IMPLEMENTATION

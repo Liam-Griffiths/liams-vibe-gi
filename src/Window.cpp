@@ -1,5 +1,6 @@
 
 // Window.cpp
+#include "../include/GLHeaders.h"
 #include "../include/Window.h"
 #include <stdexcept>
 #include <iostream>
@@ -9,12 +10,11 @@ Window::Window(int width, int height, const char* title) {
         throw std::runtime_error("Failed to initialize GLFW");
     }
 
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    // Request an OpenGL 4.3 core context. 4.3 is the floor for the features the
+    // renderer is moving onto (compute shaders, SSBOs, image load/store).
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-#ifdef __APPLE__
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-#endif
 
     window = glfwCreateWindow(width, height, title, nullptr, nullptr);
     if (!window) {
@@ -23,8 +23,16 @@ Window::Window(int width, int height, const char* title) {
     }
 
     glfwMakeContextCurrent(window);
-    // Note: Assuming GLAD or GLEW is initialized elsewhere if needed.
-    // For macOS, OpenGL is available without loader.
+
+    // Load OpenGL function pointers via GLAD.
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        throw std::runtime_error("Failed to initialize GLAD (OpenGL loader)");
+    }
+
+    std::cout << "OpenGL " << glGetString(GL_VERSION)
+              << " | " << glGetString(GL_RENDERER) << std::endl;
 }
 
 Window::~Window() {

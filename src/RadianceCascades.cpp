@@ -1,5 +1,5 @@
 #include "../include/RadianceCascades.h"
-#include <OpenGL/gl3.h>
+#include "../include/GLHeaders.h"
 #include <iostream>
 #include <GLFW/glfw3.h>
 #include <random>

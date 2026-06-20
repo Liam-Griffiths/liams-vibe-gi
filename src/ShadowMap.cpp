@@ -1,7 +1,7 @@
 // ShadowMap.cpp
 #include "../include/ShadowMap.h"
 #include <GLFW/glfw3.h>
-#include <OpenGL/gl3.h>
+#include "../include/GLHeaders.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 

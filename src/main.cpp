@@ -83,7 +83,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <OpenGL/gl3.h>
+#include "../include/GLHeaders.h"
 #include <algorithm>
 
 // Build information

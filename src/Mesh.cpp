@@ -2,7 +2,7 @@
 // Mesh.cpp
 #include "../include/Mesh.h"
 #include <GLFW/glfw3.h> // For OpenGL
-#include <OpenGL/gl3.h>
+#include "../include/GLHeaders.h"
 #include <vector>
 #include <cmath>
 #include <fstream>
