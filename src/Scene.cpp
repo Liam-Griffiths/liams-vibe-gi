@@ -798,14 +798,17 @@ void Scene::loadCornellBox() {
     const float roomDepth = 5.5f;
     const float wallThickness = 0.1f;
 
-    // FLOOR - White, diffuse surface
+    // FLOOR - Glossy reflective surface. Low roughness so screen-space reflections (SSR,
+    // toggle in the GUI) kick in: SSR reflects any surface with roughness <= 0.8, scaled by
+    // (1 - roughness), so a near-mirror floor mirrors the walls/teapot above it.
     auto floor = std::make_unique<Entity>();
     floor->addComponent(std::make_unique<TransformComponent>(
-        glm::vec3(0.0f, -roomHeight/2.0f, 0.0f), 
-        glm::vec3(0.0f), 
+        glm::vec3(0.0f, -roomHeight/2.0f, 0.0f),
+        glm::vec3(0.0f),
         glm::vec3(roomWidth, wallThickness, roomDepth)
     ));
     floor->addComponent(std::make_unique<MeshComponent>(cubeMesh.get(), glm::vec3(0.73f, 0.73f, 0.73f))); // Cornell box white
+    floor->addComponent(MaterialComponent::createSolid(glm::vec3(0.73f, 0.73f, 0.73f), 0.08f, 0.0f));
     entities.push_back(std::move(floor));
 
     // CEILING WITH SQUARE SKYLIGHT - Four separate panels leaving a square hole in the center
@@ -981,6 +984,9 @@ void Scene::loadScene(SceneType sceneType) {
         case GLTF_SPONZA:
             loadGLTFScene("models/Sponza/Sponza.gltf");
             break;
+        case ABEAUTIFULGAME:
+            loadGLTFScene("models/ABeautifulGame/ABeautifulGame.gltf");
+            break;
     }
 }
 
@@ -993,6 +999,7 @@ std::string Scene::getSceneName(SceneType sceneType) const {
         case DEFAULT_LIGHTBOX: return "Default Lightbox";
         case SPONZA_OVERHEAD: return "Sponza Overhead";
         case GLTF_SPONZA: return "Sponza (glTF PBR)";
+        case ABEAUTIFULGAME: return "A Beautiful Game (glTF)";
         default: return "Unknown Scene";
     }
 }

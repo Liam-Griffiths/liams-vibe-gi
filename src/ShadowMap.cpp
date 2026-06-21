@@ -52,11 +52,13 @@ void ShadowMap::bindForReading(unsigned int textureUnit) {
     glBindTexture(GL_TEXTURE_2D, depthMap);
 }
 
-glm::mat4 ShadowMap::getLightSpaceMatrix(const glm::vec3& lightPos, float lightRadius) {
+glm::mat4 ShadowMap::getLightSpaceMatrix(const glm::vec3& lightPos, float lightRadius, float orthoSize) {
     glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
 
-    // Orthographic bounds sized to the light's influence.
-    float projectionSize = 15.0f + lightRadius * 3.0f;
+    // Orthographic bounds. An explicit orthoSize (from the GUI "Shadow Coverage" control)
+    // lets the frustum be sized to the scene so the 4096^2 map isn't wasted on empty space
+    // (the main cause of blocky shadows). 0 falls back to the old light-radius heuristic.
+    float projectionSize = (orthoSize > 0.0f) ? orthoSize : (15.0f + lightRadius * 3.0f);
 
     // Fit the depth range to the actual light->scene distance. The old fixed far_plane=25
     // clipped large scenes (light high above Sponza), which both lost shadows and wasted

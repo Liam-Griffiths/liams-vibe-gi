@@ -48,7 +48,8 @@ public:
         SHADOW_TEST = 3,
         DEFAULT_LIGHTBOX = 4,
         SPONZA_OVERHEAD = 5,
-        GLTF_SPONZA = 6
+        GLTF_SPONZA = 6,
+        ABEAUTIFULGAME = 7
     };
     
     SceneType currentScene;                         ///< Currently loaded scene type

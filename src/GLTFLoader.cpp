@@ -86,8 +86,15 @@ Material* buildMaterial(cgltf_material* gmat, const std::string& baseDir, GLTFMo
         mat->metallic = pbr.metallic_factor;
         mat->albedoMap = getFileTexture(pbr.base_color_texture, baseDir, cache, model);
         loadMetallicRoughness(pbr.metallic_roughness_texture, baseDir, model, mat->roughnessMap, mat->metallicMap);
+        mat->opacity = pbr.base_color_factor[3]; // alpha; meaningful for alphaMode BLEND
     }
     if (gmat) {
+        // Transparency: alphaMode BLEND uses base-color alpha; KHR_materials_transmission
+        // (+ KHR_materials_ior) describe refractive glass. Both route to the forward pass.
+        if (gmat->alpha_mode != cgltf_alpha_mode_blend) mat->opacity = 1.0f; // opaque/mask are not blended
+        if (gmat->has_transmission) mat->transmission = gmat->transmission.transmission_factor;
+        if (gmat->has_ior) mat->ior = gmat->ior.ior;
+
         mat->normalMap = getFileTexture(gmat->normal_texture, baseDir, cache, model);
         mat->aoMap = getFileTexture(gmat->occlusion_texture, baseDir, cache, model);
         mat->emissionMap = getFileTexture(gmat->emissive_texture, baseDir, cache, model);

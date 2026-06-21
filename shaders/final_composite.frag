@@ -23,10 +23,15 @@ uniform mat4 invProjection; // For reconstructing world view-rays (skybox)
 uniform float lightRadius; // New: light size parameter
 uniform bool enableSkybox;  // Procedural sky for background pixels
 
+// Shadow quality controls (driven by the GUI)
+uniform float shadowBias;          // Slope-scaled depth bias; raise to kill acne/streaks
+uniform float shadowSoftnessScale; // PCF radius multiplier; raise to soften jagged edges
+
 // SSGI parameters
 uniform float ssgiStrength;
 uniform float ambientStrength;
 uniform float ssaoStrength; // New: SSAO strength
+uniform float skyGiStrength; // Environment-irradiance fallback where screen-space GI is missing
 
 // Enhanced shadow calculation with distance-based softness and Poisson disk sampling
 float ShadowCalculation(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir, float lightDistance)
@@ -37,12 +42,13 @@ float ShadowCalculation(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir, floa
     float closestDepth = texture(shadowMap, projCoords.xy).r; 
     float currentDepth = projCoords.z;
     
-    // Improved bias calculation - more stable across different angles
-    float bias = max(0.0005 * (1.0 - dot(normal, lightDir)), 0.0001);
-    
+    // Slope-scaled bias: steeper surfaces (low N.L) need more bias. Driven by the GUI so
+    // streaky self-shadow "acne" can be dialed out per scene.
+    float bias = max(shadowBias * (1.0 - dot(normal, lightDir)), shadowBias * 0.2);
+
     // PCF kernel size in texels. The old floor of 0.5 left edges essentially unfiltered
     // (jagged); widen it so the 32-tap Poisson disk actually softens the penumbra.
-    float shadowSoftness = clamp(lightDistance / lightRadius * 0.6, 2.5, 9.0);
+    float shadowSoftness = clamp(lightDistance / lightRadius * 0.6, 2.5, 9.0) * shadowSoftnessScale;
     
     // Poisson disk sampling pattern for better shadow quality
     vec2 poissonDisk[32] = vec2[](
@@ -66,12 +72,21 @@ float ShadowCalculation(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir, floa
     
     float shadow = 0.0;
     vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
-    
+
+    // Rotate the Poisson disk by a per-pixel angle (interleaved gradient noise). Without
+    // this the fixed sample orientation produces coherent streaks/banding across surfaces;
+    // randomizing per pixel turns those streaks into fine, unobtrusive noise.
+    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float ang = ign * 6.2831853;
+    float c = cos(ang), s = sin(ang);
+    mat2 rot = mat2(c, s, -s, c);
+
     // Use more samples for higher quality
     int numSamples = 32;
     for(int i = 0; i < numSamples; ++i)
     {
-        vec2 sampleCoord = projCoords.xy + poissonDisk[i] * texelSize * shadowSoftness;
+        vec2 offset = rot * poissonDisk[i];
+        vec2 sampleCoord = projCoords.xy + offset * texelSize * shadowSoftness;
         float pcfDepth = texture(shadowMap, sampleCoord).r;
         shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
     }
@@ -375,7 +390,21 @@ void main()
         qualityMultiplier = 0.8; // Increased for Ultra mode
     }
     indirectDiffuse *= ssgiStrength * qualityMultiplier;
-    
+
+    // --- Environment-irradiance fallback (fixes the scene going dark near walls) ---
+    // Screen-space GI only gathers light from on-screen surfaces, so when a wall fills the
+    // view the indirect term collapses to ~0. Where that happens, substitute sky/hemisphere
+    // irradiance in the surface-normal direction so the surface still receives bounce light.
+    // This is a cheap stand-in for a rear-facing GI probe: it doesn't double up where SSGI
+    // already has data, it only fills the holes.
+    {
+        vec3 worldN = normalize(mat3(invView) * normal);
+        vec3 envIrradiance = enableSkybox ? proceduralSky(worldN) : vec3(0.5);
+        float giLum = dot(indirectDiffuse, vec3(0.299, 0.587, 0.114));
+        float fillAmount = 1.0 - smoothstep(0.0, 0.04, giLum); // 1 where SSGI found nothing
+        indirectDiffuse += envIrradiance * skyGiStrength * fillAmount;
+    }
+
     // Sample SSAO
     float ambientOcclusion = texture(ssaoTexture, TexCoords).r;
     

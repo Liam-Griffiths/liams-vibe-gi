@@ -17,7 +17,10 @@ public:
     
     void bindForWriting();
     void bindForReading(unsigned int textureUnit);
-    glm::mat4 getLightSpaceMatrix(const glm::vec3& lightPos, float lightRadius = 2.0f);
+    // orthoSize is the half-extent of the shadow frustum in world units. Sizing it to the
+    // scene is what keeps shadows crisp: too large wastes texels (blocky shadows). Pass 0
+    // to fall back to the automatic light-radius heuristic.
+    glm::mat4 getLightSpaceMatrix(const glm::vec3& lightPos, float lightRadius = 2.0f, float orthoSize = 0.0f);
     
 private:
     void setupShadowMap();

@@ -386,6 +386,7 @@ int main() {
         Shader rcResolveShader("shaders/fullscreen.vert", "shaders/rc_temporal_resolve.frag"); // GI temporal reprojection + variance clamp
         Shader blurShader("shaders/fullscreen.vert", "shaders/blur.frag");                // GI temporal blur
         Shader compositeShader("shaders/fullscreen.vert", "shaders/final_composite.frag"); // Final lighting composite
+        Shader transparentShader("shaders/transparent.vert", "shaders/transparent.frag"); // Forward refraction pass (glass)
         Shader copyShader("shaders/fullscreen.vert", "shaders/copy.frag");               // Direct copy (no AA)
         Shader ssaoShader("shaders/fullscreen.vert", "shaders/ssao.frag");                // Screen-space ambient occlusion
         Shader ssaoBlurShader("shaders/fullscreen.vert", "shaders/ssao_blur.frag");       // SSAO blur for noise reduction
@@ -423,8 +424,32 @@ int main() {
         
         glBindFramebuffer(GL_FRAMEBUFFER, compositeFBO);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, compositeTexture, 0);
+        // Depth attachment so the forward transparent (glass) pass can depth-sort itself
+        // against other glass. Opaque occlusion is handled separately in the shader.
+        unsigned int compositeDepthRBO;
+        glGenRenderbuffers(1, &compositeDepthRBO);
+        glBindRenderbuffer(GL_RENDERBUFFER, compositeDepthRBO);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 1280, 800);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, compositeDepthRBO);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             std::cerr << "Composite FBO incomplete!" << std::endl;
+        }
+
+        // Background copy target: the opaque composite is copied here so the transparent
+        // pass can sample it for refraction without reading the framebuffer it draws into.
+        unsigned int backgroundFBO, backgroundTexture;
+        glGenFramebuffers(1, &backgroundFBO);
+        glGenTextures(1, &backgroundTexture);
+        glBindTexture(GL_TEXTURE_2D, backgroundTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 1280, 800, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindFramebuffer(GL_FRAMEBUFFER, backgroundFBO);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, backgroundTexture, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            std::cerr << "Background FBO incomplete!" << std::endl;
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -450,6 +475,15 @@ int main() {
         int antiAliasingMode = 2;       // AA mode: 0=none, 1=FXAA, 2=TAA (default TAA)
         int qualityLevel = 1;           // Quality level: 0=super low, 1=performance, 2=balanced, 3=high, 4=ultra (default: Performance for better FPS)
         bool cullingEnabled = false;    // Leave frustum culling off by default (avoid false negatives)
+
+        // Camera / shadow quality controls (GUI-driven)
+        float cameraFov = 45.0f;        // Vertical field of view in degrees
+        float shadowBias = 0.0006f;     // Slope-scaled shadow depth bias (kills streaky acne)
+        float shadowSoftnessScale = 1.0f; // PCF radius multiplier (softens jagged edges)
+        float shadowCoverage = 18.0f;   // Shadow frustum half-size in world units (smaller = crisper)
+        float refractScale = 0.5f;      // Strength of glass refraction distortion (forward pass)
+        bool skyGiEnabled = true;       // Toggle the environment-irradiance GI fallback
+        float skyGiStrength = 0.3f;     // Sky/env irradiance fill where screen-space GI is missing (near walls)
 
         // Sampling method state
         enum SamplingMethod {
@@ -700,7 +734,7 @@ int main() {
 
             // Calculate light space matrix for shadow mapping
             // This defines the light's view for shadow map generation
-            glm::mat4 lightSpaceMatrix = shadowMap.getLightSpaceMatrix(lightPos, lightRadius);
+            glm::mat4 lightSpaceMatrix = shadowMap.getLightSpaceMatrix(lightPos, lightRadius, shadowCoverage);
 
             // Handle window resizing - only update resources when size actually changes
             int width, height;
@@ -714,7 +748,7 @@ int main() {
 
             // Update camera matrices with correct aspect ratio
             float aspectRatio = (float)width / (float)height;
-            glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 100.0f);
+            glm::mat4 projection = glm::perspective(glm::radians(cameraFov), aspectRatio, 0.1f, 100.0f);
             glm::mat4 view = scene.camera.getViewMatrix();
 
             // Update camera frustum for culling (only when culling is enabled)
@@ -794,11 +828,20 @@ int main() {
             totalEntities = static_cast<int>(scene.entities.size());
             culledEntities = 0;
             renderedEntities = 0;
-            
+
+            // Transparent entities are deferred to a forward refraction pass (deferred
+            // shading can't represent see-through surfaces in the G-buffer).
+            std::vector<Entity*> transparentEntities;
+
             for (const auto& entity : scene.entities) {
                 auto meshComp = entity->getComponent<MeshComponent>();
                 auto transformComp = entity->getComponent<TransformComponent>();
                 auto materialComp = entity->getComponent<MaterialComponent>();
+
+                if (materialComp && materialComp->material && materialComp->material->isTransparent()) {
+                    transparentEntities.push_back(entity.get());
+                    continue; // drawn later in the forward transparent pass
+                }
 
                 if (meshComp && transformComp && meshComp->mesh) {
                     // Frustum culling check (if enabled). Uses the MESH's bounding sphere
@@ -976,6 +1019,8 @@ int main() {
             compositeShader.setVec3("lightColor", lightColor);
             compositeShader.setVec3("viewPos", scene.camera.position);
             compositeShader.setFloat("lightRadius", lightRadius);
+            compositeShader.setFloat("shadowBias", shadowBias);
+            compositeShader.setFloat("shadowSoftnessScale", shadowSoftnessScale);
             // CORRECTED GI strength: More cascades capture more light, so need LOWER multipliers for visual consistency
             // Ultra mode has additional enhancements (multi-bounce, better upsampling) so needs even lower strength
             float giStrength = 0.0f;
@@ -993,6 +1038,7 @@ int main() {
                 }
             }
             compositeShader.setFloat("ssgiStrength", giStrength * giStrengthScale);
+            compositeShader.setFloat("skyGiStrength", skyGiEnabled ? skyGiStrength : 0.0f);
             compositeShader.setFloat("ambientStrength", ambientEnabled ? ambientStrength : 0.0f); // GUI-controlled ambient
             compositeShader.setFloat("ssaoStrength", (ssaoEnabled && qualityLevel > 0) ? 1.0f : 0.0f); // Conditional SSAO contribution
 
@@ -1078,6 +1124,64 @@ int main() {
                 glDisable(GL_BLEND);
                 glEnable(GL_DEPTH_TEST);
                 profiler.endTimer("ssr_total");
+            }
+
+            // PASS 8.5: FORWARD TRANSPARENT / REFRACTION (glass pieces, e.g. A Beautiful Game).
+            // Deferred shading can't store see-through surfaces, so transparent materials are
+            // drawn here, after the opaque scene, sampling it for screen-space refraction.
+            if (!transparentEntities.empty()) {
+                profiler.beginTimer("transparent_total");
+
+                // Snapshot the opaque composite so glass can sample it while we draw into composite.
+                glBindFramebuffer(GL_FRAMEBUFFER, backgroundFBO);
+                glViewport(0, 0, width, height);
+                glDisable(GL_DEPTH_TEST);
+                copyShader.use();
+                copyShader.setInt("inputTexture", 0);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, compositeTexture);
+                quad.render();
+
+                // Draw glass into the composite FBO. Depth (cleared) sorts glass-vs-glass;
+                // opaque occlusion is done per-fragment in the shader against gPosition.
+                glBindFramebuffer(GL_FRAMEBUFFER, compositeFBO);
+                glViewport(0, 0, width, height);
+                glClear(GL_DEPTH_BUFFER_BIT);
+                glEnable(GL_DEPTH_TEST);
+                glDepthMask(GL_TRUE);
+                glDisable(GL_BLEND);
+
+                transparentShader.use();
+                transparentShader.setMat4("view", view);
+                transparentShader.setMat4("projection", projection);
+                transparentShader.setVec3("lightPos", lightPos);
+                transparentShader.setVec3("lightColor", lightColor);
+                transparentShader.setVec3("viewPosCam", scene.camera.position);
+                transparentShader.setVec2("invResolution", glm::vec2(1.0f / width, 1.0f / height));
+                transparentShader.setFloat("refractScale", refractScale);
+                transparentShader.setInt("backgroundTex", 0);
+                transparentShader.setInt("gPosition", 1);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, backgroundTexture);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, rc.getGPosition());
+
+                for (Entity* e : transparentEntities) {
+                    auto meshComp = e->getComponent<MeshComponent>();
+                    auto transformComp = e->getComponent<TransformComponent>();
+                    auto materialComp = e->getComponent<MaterialComponent>();
+                    if (!meshComp || !transformComp || !meshComp->mesh || !materialComp) continue;
+                    Material* m = materialComp->material.get();
+                    transparentShader.setMat4("model", transformComp->getModelMatrix());
+                    transparentShader.setVec3("baseColor", m->baseColor);
+                    transparentShader.setFloat("roughness", m->roughness);
+                    transparentShader.setFloat("transmission", m->transmission);
+                    transparentShader.setFloat("opacity", m->opacity);
+                    transparentShader.setFloat("ior", m->ior);
+                    meshComp->mesh->Draw(transparentShader.ID);
+                }
+                glDisable(GL_DEPTH_TEST);
+                profiler.endTimer("transparent_total");
             }
 
             // PASS 9: ANTI-ALIASING (Optional) - DISABLED TO FIX TEXTURE ISSUE
@@ -1182,6 +1286,13 @@ int main() {
                     rc.resetTemporalAccumulation();
                 // Lower this if strong GI is washing out material/normal-map detail (flat look).
                 ImGui::SliderFloat("GI Strength", &giStrengthScale, 0.0f, 2.0f, "%.2f");
+                // Fills environment/sky bounce where screen-space GI has no data (e.g. when the
+                // camera is close to a wall and the scene would otherwise go dark).
+                ImGui::Checkbox("Sky GI Fill", &skyGiEnabled);
+                if (skyGiEnabled) {
+                    ImGui::SameLine();
+                    ImGui::SliderFloat("##skygifill", &skyGiStrength, 0.0f, 1.0f, "%.2f");
+                }
                 const char* aaNames[] = { "None", "FXAA", "TAA" };
                 ImGui::Combo("Anti-Aliasing", &antiAliasingMode, aaNames, IM_ARRAYSIZE(aaNames));
                 if (ImGui::Combo("Sampling", &samplingMethod, samplingNames, SAMPLING_METHOD_COUNT))
@@ -1191,11 +1302,27 @@ int main() {
                 if (ImGui::SliderFloat("GI Cascade Interval", &giCascadeInterval, 0.02f, 8.0f, "%.3f", ImGuiSliderFlags_Logarithmic))
                     rc.resetTemporalAccumulation();
 
+                // --- Camera & shadow quality controls ---
+                ImGui::SeparatorText("Camera & Shadows");
+                ImGui::SliderFloat("Field of View", &cameraFov, 20.0f, 110.0f, "%.0f deg");
+                // Smaller coverage = the 4096^2 shadow map covers less world space, so each
+                // texel is smaller and shadows are crisper. Raise it if shadows get clipped.
+                if (ImGui::SliderFloat("Shadow Coverage", &shadowCoverage, 1.0f, 40.0f, "%.1f", ImGuiSliderFlags_Logarithmic))
+                    rc.resetTemporalAccumulation();
+                // Raise if direct light looks streaky (self-shadow acne); lower if shadows
+                // detach from contact points (peter-panning).
+                ImGui::SliderFloat("Shadow Bias", &shadowBias, 0.0001f, 0.004f, "%.4f");
+                // Raise to soften jagged shadow edges (wider PCF penumbra).
+                ImGui::SliderFloat("Shadow Softness", &shadowSoftnessScale, 0.25f, 4.0f, "%.2f");
+                // How strongly transparent/glass materials bend the scene behind them
+                // (forward refraction pass, e.g. the A Beautiful Game glass pieces).
+                ImGui::SliderFloat("Glass Refraction", &refractScale, 0.0f, 2.0f, "%.2f");
+
                 // --- Scene selector (reuses the existing async load path) ---
                 ImGui::SeparatorText("Scene");
                 const char* sceneNames[] = { "Cornell Box", "Teapot Lightbox", "Stone Floor",
                                              "Shadow Test", "Default Lightbox", "Sponza Overhead",
-                                             "Sponza (glTF PBR)" };
+                                             "Sponza (glTF PBR)", "A Beautiful Game (glTF)" };
                 int sceneIdx = static_cast<int>(scene.currentScene);
                 if (ImGui::Combo("Scene", &sceneIdx, sceneNames, IM_ARRAYSIZE(sceneNames)))
                     inputData.sceneSelection = sceneIdx; // handled at end of loop (loads + resets temporal)
@@ -1244,11 +1371,16 @@ int main() {
             
             // Handle scene selection
             int selectedScene = inputData.sceneSelection.exchange(-1);
-            if (selectedScene >= 0 && selectedScene <= 6) {
+            if (selectedScene >= 0 && selectedScene <= 7) {
                 scene.loadScene(static_cast<Scene::SceneType>(selectedScene));
                 // Big building-scale scenes need a much larger cascade interval than the
                 // Cornell-box default so GI reaches across the space.
                 giCascadeInterval = (selectedScene == Scene::GLTF_SPONZA) ? 2.0f : 0.125f;
+                // Size the shadow frustum to the scene so the map isn't wasted on empty
+                // space (crisp shadows). Big architectural scene vs. tabletop vs. boxes.
+                shadowCoverage = (selectedScene == Scene::GLTF_SPONZA) ? 18.0f
+                               : (selectedScene == Scene::ABEAUTIFULGAME) ? 2.5f
+                               : 6.0f;
                 // Reset temporal accumulation when scene changes
                 rc.resetTemporalAccumulation();
             }

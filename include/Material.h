@@ -108,6 +108,15 @@ public:
     float ambientOcclusion;     ///< Ambient occlusion factor (0 = full shadow, 1 = no shadow)
     glm::vec3 emission;         ///< Emission color and intensity (RGB, can be >1 for HDR)
     
+    // Transparency (glTF alpha + KHR_materials_transmission). Transparent materials are
+    // skipped by the deferred G-buffer pass and drawn in a separate forward refraction pass.
+    float opacity = 1.0f;       ///< Base-color alpha (alphaMode BLEND); 1 = fully opaque
+    float transmission = 0.0f;  ///< Fraction of light refracted through the surface (glass)
+    float ior = 1.5f;           ///< Index of refraction for the refraction bend
+
+    /// True if this material needs the forward transparent pass instead of the G-buffer.
+    bool isTransparent() const { return transmission > 0.0f || opacity < 0.999f; }
+
     // Texture mapping properties
     glm::vec2 tiling;           ///< Texture coordinate scaling for tiling (default: 1,1)
     float heightScale;          ///< Height map displacement scale (default: 0.02)
