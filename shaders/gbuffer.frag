@@ -5,6 +5,7 @@ layout (location = 2) out vec4 gAlbedo;
 layout (location = 3) out float gLinearDepth;
 layout (location = 4) out vec2 gVelocity; // New: motion vector output
 layout (location = 5) out vec3 gEmission; // New: emission output
+layout (location = 6) out float gMetallic; // Metallic (own R8 target; roughness stays in gAlbedo.a)
 
 in vec3 FragPos;
 in vec3 Normal;
@@ -163,7 +164,15 @@ void main()
         roughness *= texture(roughnessMap, finalTexCoords).r;
     }
     gAlbedo.a = roughness;
-    
+
+    // Metallic drives F0 in the composite's Cook-Torrance BRDF; without it metals were
+    // shaded as grey dielectric plastic. Default to fully dielectric for untextured geometry.
+    float metallic = hasMaterial ? materialMetallic : 0.0;
+    if (hasMaterial && hasMetallicMap) {
+        metallic *= texture(metallicMap, finalTexCoords).r;
+    }
+    gMetallic = metallic;
+
     gLinearDepth = -ViewPos.z;
     
     // Store velocity for TAA

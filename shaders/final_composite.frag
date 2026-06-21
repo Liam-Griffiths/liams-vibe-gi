@@ -7,6 +7,7 @@ uniform sampler2D gPosition;
 uniform sampler2D gNormal;
 uniform sampler2D gAlbedo;
 uniform sampler2D gEmission; // New: emission texture for emissive materials
+uniform sampler2D gMetallic; // Metallic channel (R8) for PBR F0
 uniform sampler2D shadowMap;
 uniform sampler2D rcTexture[6]; // Support up to 6 cascades
 uniform sampler2D ssaoTexture; // New: SSAO texture
@@ -32,6 +33,46 @@ uniform float ssgiStrength;
 uniform float ambientStrength;
 uniform float ssaoStrength; // New: SSAO strength
 uniform float skyGiStrength; // Environment-irradiance fallback where screen-space GI is missing
+
+// Canonical octahedral normal decode - exact inverse of octEncode() in gbuffer.frag. This is
+// the single shared decode every consumer must use; ssr.frag previously rolled its own
+// (hemisphere sqrt) decode that disagreed with this fold/remap and read wrong normals.
+vec3 octDecode(vec2 f) {
+    f = f * 2.0 - 1.0;
+    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    float t = max(-n.z, 0.0);
+    n.x += (n.x >= 0.0) ? -t : t;
+    n.y += (n.y >= 0.0) ? -t : t;
+    return normalize(n);
+}
+
+const float PI = 3.14159265359;
+
+// --- Cook-Torrance GGX BRDF terms ---
+// GGX/Trowbridge-Reitz normal distribution: concentrates highlights as roughness drops.
+float DistributionGGX(vec3 N, vec3 H, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / max(PI * d * d, 1e-6);
+}
+
+// Smith geometry (Schlick-GGX) with the direct-lighting k remapping.
+float GeometrySchlickGGX(float NdotX, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
+    return NdotX / (NdotX * (1.0 - k) + k);
+}
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
+    return GeometrySchlickGGX(max(dot(N, V), 0.0), roughness)
+         * GeometrySchlickGGX(max(dot(N, L), 0.0), roughness);
+}
+
+// Schlick Fresnel: reflectance grows toward grazing angles, tinted by F0.
+vec3 FresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
 
 // Enhanced shadow calculation with distance-based softness and Poisson disk sampling
 float ShadowCalculation(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir, float lightDistance)
@@ -128,14 +169,7 @@ float calculateSoftAttenuation(float distance, float radius) {
 // Bilateral GI post-filter for outlier removal and ultra-smooth results
 vec3 bilateralGI(vec2 uv, vec3 centerGI) {
     vec3 centerPosition = texture(gPosition, uv).xyz;
-    // Oct decode center normal
-    vec2 cenc = texture(gNormal, uv).rg;
-    vec2 cf = cenc * 2.0 - 1.0;
-    vec3 cn = vec3(cf.x, cf.y, 1.0 - abs(cf.x) - abs(cf.y));
-    float ct = clamp(-cn.z, 0.0, 1.0);
-    cn.x += (cn.x >= 0.0 ? -ct : ct);
-    cn.y += (cn.y >= 0.0 ? -ct : ct);
-    vec3 centerNormal = normalize(cn);
+    vec3 centerNormal = octDecode(texture(gNormal, uv).rg);
     
     vec3 C = vec3(0.0);
     float W = 0.0;
@@ -156,13 +190,7 @@ vec3 bilateralGI(vec2 uv, vec3 centerGI) {
             
             // Sample neighbor properties
             vec3 samplePosition = texture(gPosition, sampleUV).xyz;
-            vec2 senc = texture(gNormal, sampleUV).rg;
-            vec2 sf = senc * 2.0 - 1.0;
-            vec3 sn = vec3(sf.x, sf.y, 1.0 - abs(sf.x) - abs(sf.y));
-            float st = clamp(-sn.z, 0.0, 1.0);
-            sn.x += (sn.x >= 0.0 ? -st : st);
-            sn.y += (sn.y >= 0.0 ? -st : st);
-            vec3 sampleNormal = normalize(sn);
+            vec3 sampleNormal = octDecode(texture(gNormal, sampleUV).rg);
             
             // Sample GI from the same cascade structure as the center pixel
             vec3 sampleGI = vec3(0.0);
@@ -227,15 +255,11 @@ vec3 proceduralSky(vec3 dir) {
 void main()
 {
     vec3 position = texture(gPosition, TexCoords).xyz;
-    // Decode octahedral normal
-    vec2 encN = texture(gNormal, TexCoords).rg;
-    vec2 fn = encN * 2.0 - 1.0;
-    vec3 nrm = vec3(fn.x, fn.y, 1.0 - abs(fn.x) - abs(fn.y));
-    float tn = clamp(-nrm.z, 0.0, 1.0);
-    nrm.x += (nrm.x >= 0.0 ? -tn : tn);
-    nrm.y += (nrm.y >= 0.0 ? -tn : tn);
-    vec3 normal = normalize(nrm);
-    vec3 albedo = texture(gAlbedo, TexCoords).rgb;
+    vec3 normal = octDecode(texture(gNormal, TexCoords).rg);
+    vec4 albedoRough = texture(gAlbedo, TexCoords);
+    vec3 albedo = albedoRough.rgb;
+    float roughness = albedoRough.a;
+    float metallic = texture(gMetallic, TexCoords).r;
     
     // Background pixels (no geometry): the g-buffer position is cleared to (0,0,0) there
     // (a real fragment is never exactly at the view-space origin). NB: the decoded normal
@@ -268,18 +292,31 @@ void main()
     
     float shadow = ShadowCalculation(fragPosLightSpace, worldNormal, lightDir, lightDistance);
     
-    // Calculate raw lighting components (WITHOUT albedo yet)
+    // --- Direct lighting: Cook-Torrance metallic-roughness BRDF ---
+    // Replaces the old Lambert + Phong approximation so metals reflect their own colour and
+    // roughness actually shapes the highlight. Shadow/attenuation fold into the radiance.
+    vec3 viewDir = normalize(-fragPos); // view space: camera at origin
+    vec3 halfVec = normalize(viewDir + lightDir);
     float nDotL = max(dot(worldNormal, lightDir), 0.0);
-    vec3 lightRadiance = lightColor * attenuation;
-    
-    // Direct diffuse lighting (will be modulated by albedo)
-    vec3 directDiffuse = nDotL * lightRadiance * (1.0 - shadow);
-    
-    // Specular lighting (NOT modulated by albedo - it's a surface reflection)
-    vec3 viewDir = normalize(-fragPos);
-    vec3 reflectDir = reflect(-lightDir, worldNormal);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 64);
-    vec3 directSpecular = 0.2 * spec * lightRadiance * (1.0 - shadow);
+    float nDotV = max(dot(worldNormal, viewDir), 0.0);
+    vec3 lightRadiance = lightColor * attenuation * (1.0 - shadow);
+
+    // F0: dielectrics reflect a flat ~4%; metals tint specular with their base colour and
+    // have no diffuse lobe (metallic-roughness convention).
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+
+    float NDF = DistributionGGX(worldNormal, halfVec, roughness);
+    float G   = GeometrySmith(worldNormal, viewDir, lightDir, roughness);
+    vec3  F   = FresnelSchlick(max(dot(halfVec, viewDir), 0.0), F0);
+
+    // Specular is a surface reflection - NOT modulated by albedo (F0 already carries the tint).
+    vec3 specularBRDF = (NDF * G * F) / max(4.0 * nDotV * nDotL, 1e-4);
+    vec3 directSpecular = specularBRDF * lightRadiance * nDotL;
+
+    // Energy conservation: diffuse only gets the light specular didn't reflect (1 - F), and
+    // metals carry no diffuse (1 - metallic). Albedo is applied later with the indirect term.
+    vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
+    vec3 directDiffuse = kD * (nDotL / PI) * lightRadiance;
     
     // Calculate indirect lighting from radiance cascades with smooth interpolation
     vec3 indirectDiffuse = vec3(0.0);
@@ -319,13 +356,7 @@ void main()
         
         vec2 texelSize = 1.0 / textureSize(gPosition, 0);
         vec3 centerPosition = texture(gPosition, TexCoords).xyz;
-        vec2 centerEnc = texture(gNormal, TexCoords).rg;
-        vec2 cfn = centerEnc * 2.0 - 1.0;
-        vec3 cnrm = vec3(cfn.x, cfn.y, 1.0 - abs(cfn.x) - abs(cfn.y));
-        float ctn = clamp(-cnrm.z, 0.0, 1.0);
-        cnrm.x += (cnrm.x >= 0.0 ? -ctn : ctn);
-        cnrm.y += (cnrm.y >= 0.0 ? -ctn : ctn);
-        vec3 centerNormal = normalize(cnrm);
+        vec3 centerNormal = octDecode(texture(gNormal, TexCoords).rg);
         
         // Large sampling pattern for interpolation
         vec2 interpolationSamples[12] = vec2[](
@@ -341,13 +372,7 @@ void main()
             if (sampleCoord.x >= 0.0 && sampleCoord.x <= 1.0 && sampleCoord.y >= 0.0 && sampleCoord.y <= 1.0) {
                 // Sample neighbor position and normal from G-buffer
                 vec3 neighborPosition = texture(gPosition, sampleCoord).xyz;
-                vec2 nenc = texture(gNormal, sampleCoord).rg;
-                vec2 nf = nenc * 2.0 - 1.0;
-                vec3 nn = vec3(nf.x, nf.y, 1.0 - abs(nf.x) - abs(nf.y));
-                float nt = clamp(-nn.z, 0.0, 1.0);
-                nn.x += (nn.x >= 0.0 ? -nt : nt);
-                nn.y += (nn.y >= 0.0 ? -nt : nt);
-                vec3 neighborNormal = normalize(nn);
+                vec3 neighborNormal = octDecode(texture(gNormal, sampleCoord).rg);
                 
                 // Sample neighbor GI from cascade 0 (highest quality)
                 vec4 neighborData = texture(rcTexture[0], sampleCoord);

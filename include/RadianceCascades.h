@@ -321,7 +321,13 @@ public:
      * Contains emissive color and intensity for light-emitting surfaces
      */
     unsigned int getGEmission() const;
-    
+
+    /**
+     * Get metallic buffer from G-buffer
+     * Contains per-pixel metalness (R8) used to derive F0 in the PBR composite
+     */
+    unsigned int getGMetallic() const;
+
     /**
      * Get history texture for Temporal Anti-Aliasing
      * Contains previous frame's result for temporal upsampling
@@ -491,6 +497,7 @@ private:
     unsigned int rboDepth;                     ///< Depth renderbuffer object
     unsigned int gVelocity;                    ///< Motion vector texture for TAA (RG: screen-space velocity)
     unsigned int gEmission;                    ///< Emission texture (RGB: emissive color and intensity)
+    unsigned int gMetallic;                    ///< Metallic texture (R8: metalness for PBR F0)
     unsigned int historyTexture;               ///< Previous frame texture for TAA
     
     // Cascade Parameters

@@ -19,6 +19,18 @@ const float MIN_RAY_STEP = 0.01;
 const float MAX_DISTANCE = 50.0;
 const float THICKNESS = 0.1;
 
+// Canonical octahedral normal decode - must match octEncode() in gbuffer.frag and octDecode()
+// in final_composite.frag. The old hemisphere sqrt reconstruction here disagreed with the
+// encoder's fold/remap, so reflections traced against wrong normals.
+vec3 octDecode(vec2 f) {
+    f = f * 2.0 - 1.0;
+    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    float t = max(-n.z, 0.0);
+    n.x += (n.x >= 0.0) ? -t : t;
+    n.y += (n.y >= 0.0) ? -t : t;
+    return normalize(n);
+}
+
 vec3 SSRTrace(vec3 rayOrigin, vec3 rayDirection, out bool hitFound) {
     hitFound = false;
     
@@ -86,9 +98,7 @@ vec3 SSRTrace(vec3 rayOrigin, vec3 rayDirection, out bool hitFound) {
 void main() {
     // Sample G-buffer data
     vec3 viewPos = texture(gPosition, TexCoords).xyz;
-    vec2 normalXY = texture(gNormal, TexCoords).rg;
-    float normalZ = sqrt(max(0.0, 1.0 - dot(normalXY, normalXY)));
-    vec3 normal = normalize(vec3(normalXY, normalZ));
+    vec3 normal = octDecode(texture(gNormal, TexCoords).rg);
     vec4 albedoRoughness = texture(gAlbedo, TexCoords);
     float roughness = albedoRoughness.a;
     

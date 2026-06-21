@@ -166,6 +166,18 @@ void RadianceCascades::setupGBuffer() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT5, GL_TEXTURE_2D, gEmission, 0);
 
+    // Metallic buffer. Roughness already lives in gAlbedo.a, so metallic only needs its own
+    // single 8-bit channel (R8 is the cheapest correct packing - 1 byte/pixel vs widening a
+    // 16F target). NEAREST to match gAlbedo: material params shouldn't be filtered across edges.
+    glGenTextures(1, &gMetallic);
+    glBindTexture(GL_TEXTURE_2D, gMetallic);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, screenWidth, screenHeight, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT6, GL_TEXTURE_2D, gMetallic, 0);
+
     // Depth renderbuffer (24-bit is standard and efficient)
     glGenRenderbuffers(1, &rboDepth);
     glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
@@ -173,8 +185,8 @@ void RadianceCascades::setupGBuffer() {
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
 
-    unsigned int attachments[6] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3, GL_COLOR_ATTACHMENT4, GL_COLOR_ATTACHMENT5};
-    glDrawBuffers(6, attachments);
+    unsigned int attachments[7] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3, GL_COLOR_ATTACHMENT4, GL_COLOR_ATTACHMENT5, GL_COLOR_ATTACHMENT6};
+    glDrawBuffers(7, attachments);
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         std::cerr << "G-buffer incomplete!" << std::endl;
@@ -320,6 +332,7 @@ void RadianceCascades::cleanup() {
     glDeleteTextures(1, &gDepth);
     glDeleteTextures(1, &gVelocity); // Added gVelocity cleanup
     glDeleteTextures(1, &gEmission); // Added gEmission cleanup
+    glDeleteTextures(1, &gMetallic); // Added gMetallic cleanup
     glDeleteRenderbuffers(1, &rboDepth);
     glDeleteFramebuffers(numCascades, cascadeFBOs.data());
     glDeleteTextures(numCascades, cascadeTextures.data());
@@ -694,6 +707,9 @@ unsigned int RadianceCascades::getGVelocity() const { // Added getGVelocity
 }
 unsigned int RadianceCascades::getGEmission() const { // Added getGEmission
     return gEmission;
+}
+unsigned int RadianceCascades::getGMetallic() const {
+    return gMetallic;
 }
 unsigned int RadianceCascades::getHistoryTexture() const {
     return historyTexture;

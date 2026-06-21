@@ -1049,6 +1049,7 @@ int main() {
             compositeShader.setInt("gNormal", 1);
             compositeShader.setInt("gAlbedo", 2);
             compositeShader.setInt("gEmission", 11); // New: emission texture
+            compositeShader.setInt("gMetallic", 12); // Metallic channel for PBR F0
             compositeShader.setInt("shadowMap", 3);
             compositeShader.setInt("ssaoTexture", 10);
 
@@ -1080,6 +1081,10 @@ int main() {
             // Bind emission texture
             glActiveTexture(GL_TEXTURE11);
             glBindTexture(GL_TEXTURE_2D, rc.getGEmission());
+
+            // Bind metallic texture (PBR F0 derivation in the composite)
+            glActiveTexture(GL_TEXTURE12);
+            glBindTexture(GL_TEXTURE_2D, rc.getGMetallic());
             
             // Bind the per-cascade GI textures for sampling.
             for (int i = 0; i < activeCascades; ++i) {
