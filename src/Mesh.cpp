@@ -10,6 +10,15 @@
 #include <iostream>
 
 Mesh::Mesh(std::vector<Vertex> verts) : vertices(verts) {
+    // Bounding sphere from the AABB centre (good enough for frustum culling).
+    if (!vertices.empty()) {
+        glm::vec3 mn(vertices[0].Position), mx(vertices[0].Position);
+        for (const auto& v : vertices) { mn = glm::min(mn, v.Position); mx = glm::max(mx, v.Position); }
+        boundsCenter = (mn + mx) * 0.5f;
+        float r = 0.0f;
+        for (const auto& v : vertices) r = std::max(r, glm::length(v.Position - boundsCenter));
+        boundsRadius = r;
+    }
     setupMesh();
 }
 

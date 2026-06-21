@@ -23,6 +23,7 @@
 #include "Entity.h"
 #include "Camera.h"
 #include "Mesh.h"
+#include "GLTFLoader.h"
 
 /**
  * Scene class - Central manager for all world entities and rendering data
@@ -46,7 +47,8 @@ public:
         STONE_FLOOR = 2,
         SHADOW_TEST = 3,
         DEFAULT_LIGHTBOX = 4,
-        SPONZA_OVERHEAD = 5
+        SPONZA_OVERHEAD = 5,
+        GLTF_SPONZA = 6
     };
     
     SceneType currentScene;                         ///< Currently loaded scene type
@@ -58,6 +60,8 @@ public:
     std::unique_ptr<Mesh> dragonMesh;               ///< Shared dragon model geometry
     std::unique_ptr<Mesh> floorMesh;                ///< Shared floor plane geometry
     std::unique_ptr<Mesh> sponzaMesh;               ///< Shared Sponza architecture model
+
+    GLTFModel gltfModel;                            ///< Owns geometry/materials/textures of a loaded glTF scene
 
     /**
      * Constructor - Initializes scene and loads default content
@@ -111,6 +115,12 @@ public:
      * Large architectural scene perfect for testing global illumination and shadows
      */
     void loadSponzaScene();
+
+    /**
+     * Load a glTF scene (e.g. glTF Sponza) using the GLTFLoader. Builds one entity per
+     * primitive with imported PBR materials, plus an overhead light.
+     */
+    void loadGLTFScene(const std::string& path);
 };
 
 #endif 

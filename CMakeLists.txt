@@ -13,6 +13,7 @@ find_package(glm REQUIRED)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/imgui)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/imgui/backends)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/cgltf)
 include_directories(${CMAKE_SOURCE_DIR}/scripts)
 
 # GLAD OpenGL loader (OpenGL 4.6 core). Provides the GL function pointers at

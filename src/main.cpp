@@ -222,6 +222,12 @@ struct InputData {
 // Function prototypes
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
+void window_focus_callback(GLFWwindow* window, int focused);
+
+// Desired mouse-capture state. On Wayland, GLFW_CURSOR_DISABLED only engages once the
+// window has pointer focus, so the actual cursor mode is (re)asserted from this flag in
+// window_focus_callback whenever focus arrives (e.g. on startup click / alt-tab back).
+std::atomic<bool> g_cursorCaptured{true};
 
 // Multithreading function prototypes
 void inputProcessingThread(GLFWwindow* window, InputData& inputData, std::atomic<bool>& running);
@@ -364,6 +370,8 @@ int main() {
         glfwSetFramebufferSizeCallback(window.getGLFWWindow(), framebuffer_size_callback);
         glfwSetInputMode(window.getGLFWWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         glfwSetCursorPosCallback(window.getGLFWWindow(), mouse_callback);
+        glfwSetWindowFocusCallback(window.getGLFWWindow(), window_focus_callback);
+        glfwFocusWindow(window.getGLFWWindow()); // ensure focus so cursor capture engages immediately
 
         // Enable depth testing for proper 3D rendering
         glEnable(GL_DEPTH_TEST);
@@ -375,6 +383,7 @@ int main() {
         Shader shadowShader("shaders/shadow_depth.vert", "shaders/shadow_depth.frag");     // Shadow map generation
         Shader gBufferShader("shaders/gbuffer.vert", "shaders/gbuffer.frag");             // Deferred geometry pass
         Shader rcShader("shaders/fullscreen.vert", "shaders/rc_cascade.frag");            // Radiance cascades computation
+        Shader rcResolveShader("shaders/fullscreen.vert", "shaders/rc_temporal_resolve.frag"); // GI temporal reprojection + variance clamp
         Shader blurShader("shaders/fullscreen.vert", "shaders/blur.frag");                // GI temporal blur
         Shader compositeShader("shaders/fullscreen.vert", "shaders/final_composite.frag"); // Final lighting composite
         Shader copyShader("shaders/fullscreen.vert", "shaders/copy.frag");               // Direct copy (no AA)
@@ -428,10 +437,14 @@ int main() {
         // Timing and performance tracking variables
         // Main rendering settings and toggles
         bool ambientEnabled = false;    // Toggle for ambient lighting (default off)
+        float ambientStrength = 0.08f;  // Ambient light intensity (GUI slider; applied when enabled)
         bool giEnabled = true;          // Toggle for global illumination (default on)
         bool ssaoEnabled = false;       // Toggle for screen space ambient occlusion (default off)
         bool ssrEnabled = false;        // Toggle for screen space reflections (default off)
         bool lightEnabled = true;       // Toggle for main light (default on)
+        bool skyboxEnabled = true;      // Procedural sky behind the scene (open scenes like Sponza)
+        float giStrengthScale = 1.0f;   // User multiplier on GI strength (lower lets material/normal detail show)
+        float giCascadeInterval = 2.0f; // World length of cascade 0's interval (large: default scene is glTF Sponza)
         bool paused = false;            // Toggle for pause state
         float pausedTime = 0.0f;        // Time accumulator for pause system
         int antiAliasingMode = 2;       // AA mode: 0=none, 1=FXAA, 2=TAA (default TAA)
@@ -516,20 +529,6 @@ int main() {
             }
             profiler.endTimer("frame_setup");
             
-            // UI cache variables - accessible from both input handling and UI rendering
-            static int uiFrameCounter = 0;
-            static std::string cachedFpsText = "FPS: 0";
-            static std::string cachedQualityText = "Quality: Performance (3C)";
-            static std::string cachedGiStatusText = "GI: ON";
-            static std::string cachedSsaoStatusText = "SSAO: ON";
-            static std::string cachedSsrStatusText = "SSR: OFF";
-            static std::string cachedAaStatusText = "AA: TAA";
-            static std::string cachedCameraPosText = "Camera: (0.0, 0.0, 0.0)";
-            static std::string cachedSceneText = "Scene: Cornell Box";
-            static std::string cachedCullingText = "Culling: ON (0/0)";
-            static std::string cachedSamplingText = "Sampling: Uniform Random Hemisphere";
-            uiFrameCounter++;
-            
             profiler.beginTimer("input_processing");
             // Process input from async thread
             if (inputData.exitRequested) {
@@ -542,15 +541,10 @@ int main() {
             }
             if (inputData.giToggle.exchange(false)) {
                 giEnabled = !giEnabled;
-                
-                // Immediately update UI cache for responsive feedback
-                cachedGiStatusText = "GI: " + std::string(giEnabled ? "ON" : "OFF");
+                rc.resetTemporalAccumulation();
             }
             if (inputData.ssaoToggle.exchange(false)) {
                 ssaoEnabled = !ssaoEnabled;
-                
-                // Immediately update UI cache for responsive feedback
-                cachedSsaoStatusText = "SSAO: " + std::string(ssaoEnabled ? "ON" : "OFF");
             }
             if (inputData.lightToggle.exchange(false)) {
                 lightEnabled = !lightEnabled;
@@ -559,26 +553,20 @@ int main() {
             }
             if (inputData.ssrToggle.exchange(false)) {
                 ssrEnabled = !ssrEnabled;
-                cachedSsrStatusText = "SSR: " + std::string(ssrEnabled ? "ON" : "OFF");
             }
             if (inputData.antiAliasingToggle.exchange(false)) {
                 antiAliasingMode = (antiAliasingMode + 1) % 3; // Cycle: None -> FXAA -> TAA -> None
-                std::string aaNames[] = {"None", "FXAA", "TAA"};
-                cachedAaStatusText = "AA: " + aaNames[antiAliasingMode];
             }
             if (inputData.samplingToggle.exchange(false)) {
                 samplingMethod = (samplingMethod + 1) % SAMPLING_METHOD_COUNT;
+                rc.resetTemporalAccumulation();
             }
             if (inputData.cullingToggle.exchange(false)) {
                 cullingEnabled = !cullingEnabled;
             }
             if (inputData.qualityToggle.exchange(false)) {
                 qualityLevel = (qualityLevel + 1) % 5; // 5 quality levels: 0-4
-                
-                // Immediately update UI cache for responsive feedback
-                std::string qualityNames[] = {"Super Low", "Performance", "Balanced", "High", "Ultra"};
-                std::string cascadeCounts[] = {"2C", "3C", "4C", "5C", "5C"};
-                cachedQualityText = "Quality: " + qualityNames[qualityLevel] + " (" + cascadeCounts[qualityLevel] + ")";
+                rc.resetTemporalAccumulation();
             }
 
             if (inputData.resetTemporal.exchange(false)) {
@@ -586,6 +574,7 @@ int main() {
             }
             if (inputData.pauseToggle.exchange(false)) {
                 paused = !paused;
+                g_cursorCaptured = !paused;
                 if (paused) {
                     pausedTime = glfwGetTime();
                     glfwSetInputMode(window.getGLFWWindow(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
@@ -594,23 +583,25 @@ int main() {
                 }
             }
             
-            // Process camera movement (only when not paused)
+            // Process camera movement (only when not paused).
+            // NOTE: do NOT reset temporal accumulation on movement - the GI trace uses
+            // motion-vector reprojection + a neighbourhood variance clamp, which keep the
+            // accumulated result stable through camera motion. Resetting here would discard
+            // all accumulated samples every frame and expose the raw, blotchy single-frame
+            // estimate - the visible "quality drops while moving" symptom.
             if (!paused) {
-                bool anyMovement = false;
-                if (inputData.moveForward) { scene.camera.processKeyboard(0, deltaTime); anyMovement = true; }
-                if (inputData.moveBackward) { scene.camera.processKeyboard(1, deltaTime); anyMovement = true; }
-                if (inputData.moveLeft) { scene.camera.processKeyboard(2, deltaTime); anyMovement = true; }
-                if (inputData.moveRight) { scene.camera.processKeyboard(3, deltaTime); anyMovement = true; }
-                
-                // Reset temporal accumulation immediately on any movement input
-                if (anyMovement) {
-                    rc.resetTemporalAccumulation();
-                }
+                if (inputData.moveForward)  { scene.camera.processKeyboard(0, deltaTime); }
+                if (inputData.moveBackward) { scene.camera.processKeyboard(1, deltaTime); }
+                if (inputData.moveLeft)     { scene.camera.processKeyboard(2, deltaTime); }
+                if (inputData.moveRight)    { scene.camera.processKeyboard(3, deltaTime); }
             }
 
             // Process light controls from async input (only when not paused)
             if (!paused) {
-                bool anyLightMovement = false;
+                // Apply light movement / property changes. As with the camera, we do NOT
+                // reset temporal accumulation here: the variance clamp lets the accumulated
+                // GI adapt to the new lighting over a few frames (a slight settle is far
+                // preferable to the blotchy single-frame estimate a hard reset would show).
                 for (const auto& entity : scene.entities) {
                     if (auto light = entity->getComponent<LightComponent>()) {
                         if (auto transform = entity->getComponent<TransformComponent>()) {
@@ -619,30 +610,22 @@ int main() {
                                 transform->position.x += inputData.lightMoveX * deltaTime * 60.0f; // Scale by frame rate
                                 transform->position.z += inputData.lightMoveZ * deltaTime * 60.0f;
                                 transform->position.y += inputData.lightMoveY * deltaTime * 60.0f;
-                                anyLightMovement = true;
                             }
-                            
+
                             // Apply light property changes
                             if (inputData.lightIntensityDelta != 0.0f) {
                                 light->intensity += inputData.lightIntensityDelta * deltaTime * 60.0f;
                                 light->intensity = std::max(0.0f, light->intensity);
-                                anyLightMovement = true;
                             }
-                            
+
                             if (inputData.lightRadiusDelta != 0.0f) {
                                 light->radius += inputData.lightRadiusDelta * deltaTime * 60.0f;
                                 light->radius = std::max(0.5f, light->radius);
-                                anyLightMovement = true;
                             }
                         }
                     }
                 }
-                
-                // Reset temporal accumulation immediately on any light changes
-                if (anyLightMovement) {
-                    rc.resetTemporalAccumulation();
-                }
-                
+
                 // Update all behaviour components (only when not paused)
                 for (const auto& entity : scene.entities) {
                     if (auto behaviour = entity->getComponent<Behaviour>()) {
@@ -818,16 +801,19 @@ int main() {
                 auto materialComp = entity->getComponent<MaterialComponent>();
 
                 if (meshComp && transformComp && meshComp->mesh) {
-                    // Frustum culling check (if enabled)
+                    // Frustum culling check (if enabled). Uses the MESH's bounding sphere
+                    // transformed into world space - the entity transform alone is wrong for
+                    // baked-transform geometry (e.g. glTF, where every entity sits at origin).
                     bool shouldRender = true;
                     if (cullingEnabled) {
-                        // Calculate bounding sphere for this entity (larger base radius + margin)
-                        glm::vec3 center = transformComp->getBoundingCenter();
-                        float radius = transformComp->getBoundingRadius(15.0f) + 2.0f; // margin
-                        
-                        // Check if entity is in camera frustum
+                        glm::mat4 M = transformComp->getModelMatrix();
+                        glm::vec3 center = glm::vec3(M * glm::vec4(meshComp->mesh->boundsCenter, 1.0f));
+                        float maxScale = std::max({ glm::length(glm::vec3(M[0])),
+                                                    glm::length(glm::vec3(M[1])),
+                                                    glm::length(glm::vec3(M[2])) });
+                        float radius = meshComp->mesh->boundsRadius * maxScale + 0.5f; // small margin
+
                         shouldRender = scene.camera.isSphereInFrustum(center, radius);
-                        
                         if (!shouldRender) {
                             culledEntities++;
                             continue; // Skip rendering this entity
@@ -919,50 +905,48 @@ int main() {
                 rcShader.setFloat("lightRadius", lightRadius);   // Light attenuation radius
                 rcShader.setFloat("time", glfwGetTime());         // Time for temporal effects
                 rcShader.setInt("activeCascades", activeCascades); // Dynamic cascade count for quality-aware computation
-                // Quality-dependent ray-march steps and angular samples base
+                // Quality-dependent ray-march steps and angular budgets.
+                // Per the radiance cascades penumbra criterion, nearAngular is cascade 0's
+                // (small) sample count and farAngular is the cap that the far cascades grow
+                // toward (doubling per level). near < far: the near field varies little
+                // angularly, the far field a lot - and far cascades are cheap (low-res).
                 int raySteps = 6;
-                int nearAngular = 32;
-                int farAngular = 8;
+                int nearAngular = 8;
+                int farAngular = 48;
                 switch (qualityLevel) {
-                    case 0: raySteps = 3; nearAngular = 20; farAngular = 6; break;   // Super Low
-                    case 1: raySteps = 4; nearAngular = 28; farAngular = 8; break;   // Performance
-                    case 2: raySteps = 6; nearAngular = 36; farAngular = 10; break;  // Balanced
-                    case 3: raySteps = 8; nearAngular = 48; farAngular = 12; break;  // High
-                    case 4: raySteps = 10; nearAngular = 60; farAngular = 14; break; // Ultra
+                    case 0: raySteps = 3; nearAngular = 6;  farAngular = 24; break;  // Super Low
+                    case 1: raySteps = 4; nearAngular = 8;  farAngular = 32; break;  // Performance
+                    case 2: raySteps = 6; nearAngular = 8;  farAngular = 48; break;  // Balanced
+                    case 3: raySteps = 8; nearAngular = 10; farAngular = 64; break;  // High
+                    case 4: raySteps = 10; nearAngular = 12; farAngular = 96; break; // Ultra
                 }
                 rcShader.setInt("rayMarchSteps", raySteps);
                 rcShader.setInt("samplingMethod", samplingMethod);
-                // Also update band-limiting parameters for this session
+                // Scene-scaled cascade interval, then recompute band-limiting parameters.
+                rc.setCascadeBaseInterval(giCascadeInterval);
                 rc.setBandLimitingParameters(nearAngular, farAngular, 0.6f);
                 profiler.endTimer("gi_setup");
                 
                 profiler.beginTimer("gi_compute");
-                rc.compute(rcShader, view, projection, activeCascades);
+                rc.compute(rcShader, rcResolveShader, view, projection, activeCascades);
                 profiler.endTimer("gi_compute");
-                
+
                 // PASS 6: GI QUALITY-DEPENDENT BLUR
                 // Apply blur based on quality level for optimal performance/quality balance
                 profiler.beginTimer("gi_blur");
-                switch (qualityLevel) {
-                    case 0: // Super Low: minimal blur for performance
-                        // Skip blur entirely for maximum performance
-                        break;
-                    case 1: // Performance: reduced blur (only blur first 2 cascades)
-                        if (activeCascades >= 2) {
-                            rc.blur(blurShader, 2); // Only blur first 2 cascades for performance
-                        } else {
+                {
+                    switch (qualityLevel) {
+                        case 0: // Super Low: minimal blur for performance
+                            break;
+                        case 1: // Performance: reduced blur (only blur first 2 cascades)
+                            rc.blur(blurShader, activeCascades >= 2 ? 2 : activeCascades);
+                            break;
+                        case 2: // Balanced
+                        case 3: // High
+                        case 4: // Ultra
                             rc.blur(blurShader, activeCascades);
-                        }
-                        break;
-                    case 2: // Balanced: standard blur
-                        rc.blur(blurShader, activeCascades);
-                        break;
-                    case 3: // High: enhanced blur
-                        rc.blur(blurShader, activeCascades);
-                        break;
-                    case 4: // Ultra: maximum quality blur (could be multi-pass in future)
-                        rc.blur(blurShader, activeCascades);
-                        break;
+                            break;
+                    }
                 }
                 profiler.endTimer("gi_blur");
             }
@@ -986,6 +970,8 @@ int main() {
             compositeShader.setMat4("view", view);
             compositeShader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
             compositeShader.setMat4("invView", glm::inverse(view));
+            compositeShader.setMat4("invProjection", glm::inverse(projection));
+            compositeShader.setBool("enableSkybox", skyboxEnabled);
             compositeShader.setVec3("lightPos", lightPos);
             compositeShader.setVec3("lightColor", lightColor);
             compositeShader.setVec3("viewPos", scene.camera.position);
@@ -994,20 +980,24 @@ int main() {
             // Ultra mode has additional enhancements (multi-bounce, better upsampling) so needs even lower strength
             float giStrength = 0.0f;
             if (giEnabled) {
+                // Lowered ~0.6x vs before: the energy-correct cascade merge (transmittance
+                // weighting instead of the old 0.4 loss factor) now propagates more
+                // far-field radiance, so less composite gain is needed for the same look.
                 switch (qualityLevel) {
-                    case 0: giStrength = 0.85f; break; // Super Low (2C): highest strength since fewer cascades
-                    case 1: giStrength = 0.70f; break; // Performance (3C): reduced strength for extra cascade
-                    case 2: giStrength = 0.55f; break; // Balanced (4C): balanced strength for good coverage
-                    case 3: giStrength = 0.45f; break; // High (5C): this looks good - keep as reference
-                    case 4: giStrength = 0.82f; break; // Ultra (6C): increased to match High's effective brightness (0.82 × 0.22 = 0.18)
-                    default: giStrength = 0.55f; break; // Fallback to balanced
+                    case 0: giStrength = 0.52f; break; // Super Low (2C)
+                    case 1: giStrength = 0.42f; break; // Performance (3C)
+                    case 2: giStrength = 0.33f; break; // Balanced (4C)
+                    case 3: giStrength = 0.27f; break; // High (5C) - reference
+                    case 4: giStrength = 0.50f; break; // Ultra
+                    default: giStrength = 0.33f; break; // Fallback to balanced
                 }
             }
-            compositeShader.setFloat("ssgiStrength", giStrength);
-            compositeShader.setFloat("ambientStrength", ambientEnabled ? 0.08f : 0.0f); // Reduced ambient
+            compositeShader.setFloat("ssgiStrength", giStrength * giStrengthScale);
+            compositeShader.setFloat("ambientStrength", ambientEnabled ? ambientStrength : 0.0f); // GUI-controlled ambient
             compositeShader.setFloat("ssaoStrength", (ssaoEnabled && qualityLevel > 0) ? 1.0f : 0.0f); // Conditional SSAO contribution
-            compositeShader.setInt("activeCascades", activeCascades); // Pass cascade count for quality-aware processing
-            
+
+            compositeShader.setInt("activeCascades", activeCascades);
+
             // Bind all G-buffer textures for lighting calculations
             compositeShader.setInt("gPosition", 0);
             compositeShader.setInt("gNormal", 1);
@@ -1015,7 +1005,7 @@ int main() {
             compositeShader.setInt("gEmission", 11); // New: emission texture
             compositeShader.setInt("shadowMap", 3);
             compositeShader.setInt("ssaoTexture", 10);
-            
+
             // Bind radiance cascade textures (multi-scale GI data) - only active cascades
             for (int i = 0; i < activeCascades; ++i) {
                 compositeShader.setInt("rcTexture[" + std::to_string(i) + "]", 4 + i);
@@ -1024,7 +1014,6 @@ int main() {
             for (int i = activeCascades; i < 6; ++i) {
                 compositeShader.setInt("rcTexture[" + std::to_string(i) + "]", 0); // Bind to position texture as safe fallback
             }
-            compositeShader.setInt("activeCascades", activeCascades);
             profiler.endTimer("composite_setup");
             
             // Activate and bind all required textures
@@ -1046,7 +1035,7 @@ int main() {
             glActiveTexture(GL_TEXTURE11);
             glBindTexture(GL_TEXTURE_2D, rc.getGEmission());
             
-            // Bind all cascade textures for GI sampling - only active cascades
+            // Bind the per-cascade GI textures for sampling.
             for (int i = 0; i < activeCascades; ++i) {
                 glActiveTexture(GL_TEXTURE4 + i);
                 glBindTexture(GL_TEXTURE_2D, rc.getTexture(i));
@@ -1072,7 +1061,22 @@ int main() {
             // PASS 8: SCREEN SPACE REFLECTIONS (Optional)
             if (ssrEnabled) {
                 profiler.beginTimer("ssr_total");
+                // Trace reflections (ssr.frag outputs premultiplied reflection.rgb, a=strength).
                 rc.computeSSR(ssrShader, compositeTexture, view, projection, scene.camera.position);
+                // Composite them OVER the scene: dst*(1-a) + src. Without this the SSR result
+                // was computed into its own texture and never used (the reason "SSR didn't work").
+                glBindFramebuffer(GL_FRAMEBUFFER, compositeFBO);
+                glViewport(0, 0, width, height);
+                glDisable(GL_DEPTH_TEST);
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+                copyShader.use();
+                copyShader.setInt("inputTexture", 0);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, rc.getSSRTexture());
+                quad.render();
+                glDisable(GL_BLEND);
+                glEnable(GL_DEPTH_TEST);
                 profiler.endTimer("ssr_total");
             }
 
@@ -1111,91 +1115,100 @@ int main() {
 
             glEnable(GL_DEPTH_TEST);
 
-            // PASS 9: FULLY STABLE UI RENDERING (NO FLICKERING)
-            // All text always visible, with cached strings updated at different frequencies
+            // PASS 9: CONTROL PANEL (interactive ImGui widgets bound directly to state)
             profiler.beginTimer("ui_total");
-            
+
             profiler.beginTimer("ui_setup");
-            // Start the Dear ImGui frame
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
             profiler.endTimer("ui_setup");
-            
-            // PROBE 1: Update FPS and camera position every 3 frames (high frequency for responsiveness)
-            profiler.beginTimer("ui_cache_update");
-            if (uiFrameCounter % 3 == 0) {
-                cachedFpsText = "FPS: " + std::to_string(fps);
-                
-                // Update camera position display
-                glm::vec3 camPos = scene.camera.position;
-                cachedCameraPosText = "Camera: (" + 
-                    std::to_string(static_cast<int>(camPos.x * 10) / 10.0f) + ", " +
-                    std::to_string(static_cast<int>(camPos.y * 10) / 10.0f) + ", " + 
-                    std::to_string(static_cast<int>(camPos.z * 10) / 10.0f) + ")";
-                
-                // Update culling statistics display
-                cachedCullingText = "Culling: " + std::string(cullingEnabled ? "ON" : "OFF") + 
-                    " (" + std::to_string(culledEntities) + "/" + std::to_string(totalEntities) + ")";
-            }
-            
-            // PROBE 2: Update quality status every 6 frames (medium frequency)
-            if (uiFrameCounter % 6 == 0) {
-                std::string qualityNames[] = {"Super Low", "Performance", "Balanced", "High", "Ultra"};
-                std::string cascadeCounts[] = {"2C", "3C", "4C", "5C", "5C"};
-                cachedQualityText = "Quality: " + qualityNames[qualityLevel] + " (" + cascadeCounts[qualityLevel] + ")";
-                cachedGiStatusText = "GI: " + std::string(giEnabled ? "ON" : "OFF");
-                cachedSsaoStatusText = "SSAO: " + std::string(ssaoEnabled ? "ON" : "OFF");
-                cachedSceneText = "Scene: " + scene.getSceneName(scene.currentScene);
-                cachedSamplingText = std::string("Sampling: ") + samplingNames[samplingMethod];
-            }
-            profiler.endTimer("ui_cache_update");
-            
-            // Ultra-fast ImGui UI rendering
+
             profiler.beginTimer("ui_render");
-            
-            // Create main info overlay window
-            ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-            ImGui::SetNextWindowBgAlpha(0.7f); // Transparent background
-            if (ImGui::Begin("Vibe-GI Info", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
+            const ImVec4 COL_ACCENT(0.4f, 0.85f, 1.0f, 1.0f);
+            const ImVec4 COL_MUTED (0.6f, 0.6f, 0.6f, 1.0f);
+
+            ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowBgAlpha(0.85f);
+            if (ImGui::Begin("Vibe-GI", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
             {
-                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Vibe-GI: Real-time Global Illumination");
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Build %s (%s)", BUILD_NUMBER, BUILD_DATE);
-                ImGui::Separator();
-                
-                ImGui::Text("WASD: Move camera");
-                ImGui::Text("Mouse: Look around");
-                ImGui::Text("1-6: Scene Selection, M: Toggle Ambient");
-                ImGui::Text("G: Toggle GI, T: Toggle SSAO, F: Toggle SSR");
-                ImGui::Text("C: Cycle AA, Z: Quality, J: Toggle Culling");
-                ImGui::Text("X: Show Performance, Arrow Keys: Move Light");
-                ImGui::Text("K/L: Light Height, O/P: Intensity, I/U: Radius");
-                ImGui::Text("?: Cycle Sampling");
-                
-                ImGui::Separator();
-                
-                // Camera position display
-                ImGui::TextColored(ImVec4(0.8f, 0.8f, 1.0f, 1.0f), "%s", cachedCameraPosText.c_str());
-                ImGui::Text("%s", cachedSamplingText.c_str());
-                
-                // Culling statistics display
-                ImGui::TextColored(cullingEnabled ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", cachedCullingText.c_str());
-                
-                // Scene information display
-                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "%s", cachedSceneText.c_str());
-                
-                ImGui::Separator();
-                
-                // Status line with cached values
-                ImGui::Text("%s", cachedFpsText.c_str());
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "%s", cachedQualityText.c_str());
-                ImGui::SameLine();
-                ImGui::TextColored(giEnabled ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", cachedGiStatusText.c_str());
-                ImGui::SameLine();
-                ImGui::TextColored(ssaoEnabled ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", cachedSsaoStatusText.c_str());
-                ImGui::TextColored(ssrEnabled ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", cachedSsrStatusText.c_str());
-                ImGui::TextColored(antiAliasingMode > 0 ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s", cachedAaStatusText.c_str());
+                // --- Stats (read-only) ---
+                ImGui::TextColored(COL_ACCENT, "Vibe-GI: Real-time Global Illumination");
+                ImGui::TextColored(COL_MUTED, "Build %s (%s)", BUILD_NUMBER, BUILD_DATE);
+                glm::vec3 camPos = scene.camera.position;
+                ImGui::Text("FPS: %d   Camera: (%.1f, %.1f, %.1f)", fps, camPos.x, camPos.y, camPos.z);
+
+                // --- Toggles (bound directly to render state) ---
+                ImGui::SeparatorText("Rendering");
+                if (ImGui::Checkbox("Global Illumination", &giEnabled)) rc.resetTemporalAccumulation();
+                ImGui::Checkbox("SSAO", &ssaoEnabled); ImGui::SameLine();
+                ImGui::Checkbox("SSR", &ssrEnabled);
+                ImGui::Checkbox("Ambient", &ambientEnabled); ImGui::SameLine();
+                if (ImGui::Checkbox("Main Light", &lightEnabled)) rc.resetTemporalAccumulation();
+                ImGui::BeginDisabled(!ambientEnabled);
+                ImGui::SliderFloat("Ambient Strength", &ambientStrength, 0.0f, 1.0f, "%.3f");
+                ImGui::EndDisabled();
+                ImGui::Checkbox("Frustum Culling", &cullingEnabled); ImGui::SameLine();
+                ImGui::Checkbox("Skybox", &skyboxEnabled);
+                ImGui::TextColored(COL_MUTED, "Culled: %d / %d", culledEntities, totalEntities);
+
+                // --- Light controls (edit the primary light's ECS component directly) ---
+                ImGui::SeparatorText("Light");
+                {
+                    LightComponent* primaryLight = nullptr;
+                    for (const auto& e : scene.entities) {
+                        if (auto lc = e->getComponent<LightComponent>()) { primaryLight = lc; break; }
+                    }
+                    if (primaryLight) {
+                        ImGui::ColorEdit3("Color", &primaryLight->color[0], ImGuiColorEditFlags_NoInputs);
+                        ImGui::SliderFloat("Intensity", &primaryLight->intensity, 0.0f, 300.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
+                        ImGui::SliderFloat("Radius", &primaryLight->radius, 0.5f, 120.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
+                        ImGui::TextColored(COL_MUTED, "Presets:"); ImGui::SameLine();
+                        if (ImGui::SmallButton("White"))   primaryLight->color = glm::vec3(1.0f, 1.0f, 1.0f);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Day"))     primaryLight->color = glm::vec3(1.0f, 0.95f, 0.88f);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Evening")) primaryLight->color = glm::vec3(1.0f, 0.55f, 0.30f);
+                    } else {
+                        ImGui::TextColored(COL_MUTED, "No light in scene");
+                    }
+                }
+
+                // --- Quality / sampling (combos) ---
+                ImGui::SeparatorText("Quality");
+                const char* qualityNames[] = { "Super Low (2C)", "Performance (3C)",
+                                               "Balanced (4C)", "High (5C)", "Ultra (5C)" };
+                if (ImGui::Combo("Quality", &qualityLevel, qualityNames, IM_ARRAYSIZE(qualityNames)))
+                    rc.resetTemporalAccumulation();
+                // Lower this if strong GI is washing out material/normal-map detail (flat look).
+                ImGui::SliderFloat("GI Strength", &giStrengthScale, 0.0f, 2.0f, "%.2f");
+                const char* aaNames[] = { "None", "FXAA", "TAA" };
+                ImGui::Combo("Anti-Aliasing", &antiAliasingMode, aaNames, IM_ARRAYSIZE(aaNames));
+                if (ImGui::Combo("Sampling", &samplingMethod, samplingNames, SAMPLING_METHOD_COUNT))
+                    rc.resetTemporalAccumulation();
+                // Cascade 0 interval length (world units). Small for the Cornell box, large
+                // for building-scale scenes like glTF Sponza so GI reaches across the space.
+                if (ImGui::SliderFloat("GI Cascade Interval", &giCascadeInterval, 0.02f, 8.0f, "%.3f", ImGuiSliderFlags_Logarithmic))
+                    rc.resetTemporalAccumulation();
+
+                // --- Scene selector (reuses the existing async load path) ---
+                ImGui::SeparatorText("Scene");
+                const char* sceneNames[] = { "Cornell Box", "Teapot Lightbox", "Stone Floor",
+                                             "Shadow Test", "Default Lightbox", "Sponza Overhead",
+                                             "Sponza (glTF PBR)" };
+                int sceneIdx = static_cast<int>(scene.currentScene);
+                if (ImGui::Combo("Scene", &sceneIdx, sceneNames, IM_ARRAYSIZE(sceneNames)))
+                    inputData.sceneSelection = sceneIdx; // handled at end of loop (loads + resets temporal)
+
+                // --- Keyboard reference (collapsed by default) ---
+                if (ImGui::CollapsingHeader("Keyboard Shortcuts")) {
+                    ImGui::TextColored(COL_MUTED,
+                        "WASD: move   Mouse: look   Space: pause/cursor\n"
+                        "1-6: scene   G/T/F: GI/SSAO/SSR   M: ambient\n"
+                        "Z: quality   C: AA   J: culling   ?: sampling\n"
+                        "Arrows: move light   K/L: height   O/P: intensity   I/U: radius\n"
+                        "X: perf metrics   R: reset accumulation");
+                }
             }
             ImGui::End();
             profiler.endTimer("ui_render");
@@ -1231,8 +1244,11 @@ int main() {
             
             // Handle scene selection
             int selectedScene = inputData.sceneSelection.exchange(-1);
-            if (selectedScene >= 0 && selectedScene <= 5) {
+            if (selectedScene >= 0 && selectedScene <= 6) {
                 scene.loadScene(static_cast<Scene::SceneType>(selectedScene));
+                // Big building-scale scenes need a much larger cascade interval than the
+                // Cornell-box default so GI reaches across the space.
+                giCascadeInterval = (selectedScene == Scene::GLTF_SPONZA) ? 2.0f : 0.125f;
                 // Reset temporal accumulation when scene changes
                 rc.resetTemporalAccumulation();
             }
@@ -1305,9 +1321,25 @@ void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
     lastX = xpos;
     lastY = ypos;
 
+    // In mouse/GUI mode (cursor not captured) the pointer drives the UI, not the camera.
+    // We still updated lastX/lastY above so re-entering mouselook doesn't snap the view.
+    if (!g_cursorCaptured.load()) {
+        return;
+    }
+
     // Apply mouse movement to camera
     Camera* camera = static_cast<Camera*>(glfwGetWindowUserPointer(window));
     if (camera) {
         camera->processMouse(xoffset, yoffset);
+    }
+}
+
+// Re-assert the desired cursor mode whenever the window (re)gains focus. This is what
+// makes mouselook capture engage at startup and after alt-tab on Wayland, where
+// GLFW_CURSOR_DISABLED is a no-op until the window actually holds pointer focus.
+void window_focus_callback(GLFWwindow* window, int focused) {
+    if (focused) {
+        glfwSetInputMode(window, GLFW_CURSOR,
+                         g_cursorCaptured.load() ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
     }
 }

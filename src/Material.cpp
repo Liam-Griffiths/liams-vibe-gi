@@ -62,6 +62,29 @@ bool Texture::loadFromFile(const std::string& path) {
     return true;
 }
 
+bool Texture::loadFromMemory(const unsigned char* data, int w, int h, int channels) {
+    if (!data || w <= 0 || h <= 0) return false;
+    width = w; height = h; nrChannels = channels;
+
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    GLenum format = GL_RGB;
+    if (channels == 1) format = GL_RED;
+    else if (channels == 4) format = GL_RGBA;
+    // Single-channel maps (roughness/metallic) must not be swizzled to luminance.
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return true;
+}
+
 void Texture::bind(unsigned int unit) const {
     glActiveTexture(GL_TEXTURE0 + unit);
     glBindTexture(GL_TEXTURE_2D, id);
@@ -90,6 +113,7 @@ Material::Material(const glm::vec3& color, float roughness, float metallic, cons
 }
 
 Material::~Material() {
+    if (!ownsTextures) return; // textures owned elsewhere (e.g. glTF image cache)
     delete albedoMap;
     delete normalMap;
     delete roughnessMap;

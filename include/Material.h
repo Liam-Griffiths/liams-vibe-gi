@@ -65,10 +65,20 @@ public:
      * @return true if loading succeeded, false otherwise
      */
     bool loadFromFile(const std::string& path);
-    
+
+    /**
+     * Create a texture from already-decoded pixel data (used by the glTF loader, e.g.
+     * to upload single-channel maps split out of a packed metallic-roughness image).
+     *
+     * @param data     Tightly packed pixels, channels interleaved
+     * @param w,h      Dimensions
+     * @param channels 1 (GL_RED), 3 (GL_RGB) or 4 (GL_RGBA)
+     */
+    bool loadFromMemory(const unsigned char* data, int w, int h, int channels);
+
     /**
      * Bind texture to specified texture unit for rendering
-     * 
+     *
      * @param unit OpenGL texture unit (0-31, default: 0)
      */
     void bind(unsigned int unit = 0) const;
@@ -110,7 +120,11 @@ public:
     Texture* aoMap;             ///< Ambient occlusion texture (R channel)
     Texture* heightMap;         ///< Height/displacement map (R channel)
     Texture* emissionMap;       ///< Emission texture (RGB)
-    
+
+    /// When false, the destructor does NOT delete the texture maps - used when textures
+    /// are owned/shared elsewhere (e.g. the glTF loader's image cache).
+    bool ownsTextures = true;
+
     /**
      * Default constructor - Creates basic material with default properties
      */

@@ -53,14 +53,20 @@ void ShadowMap::bindForReading(unsigned int textureUnit) {
 }
 
 glm::mat4 ShadowMap::getLightSpaceMatrix(const glm::vec3& lightPos, float lightRadius) {
-    float near_plane = 1.0f, far_plane = 25.0f; // Increased far plane
-    
-    // Much larger projection bounds based on light radius to eliminate cutoffs
-    float projectionSize = 15.0f + lightRadius * 3.0f; // Base 15 units + radius scaling
-    glm::mat4 lightProjection = glm::ortho(-projectionSize, projectionSize, -projectionSize, projectionSize, near_plane, far_plane);
-    
-    // Look at the scene center (origin) instead of a hardcoded point
     glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
+
+    // Orthographic bounds sized to the light's influence.
+    float projectionSize = 15.0f + lightRadius * 3.0f;
+
+    // Fit the depth range to the actual light->scene distance. The old fixed far_plane=25
+    // clipped large scenes (light high above Sponza), which both lost shadows and wasted
+    // depth precision -> jagged/incomplete shadows.
+    float dist = glm::length(lightPos - sceneCenter);
+    float near_plane = std::max(0.5f, dist * 0.05f);
+    float far_plane = dist + projectionSize + 5.0f;
+
+    glm::mat4 lightProjection = glm::ortho(-projectionSize, projectionSize, -projectionSize, projectionSize, near_plane, far_plane);
+
     glm::mat4 lightView = glm::lookAt(lightPos, sceneCenter, glm::vec3(0.0, 1.0, 0.0));
     glm::mat4 lightSpaceMatrix = lightProjection * lightView;
     return lightSpaceMatrix;

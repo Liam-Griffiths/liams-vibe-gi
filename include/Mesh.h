@@ -21,6 +21,11 @@ public:
     std::vector<Vertex> vertices;
     unsigned int VAO;
 
+    // Local-space bounding sphere (computed from vertices). Used for frustum culling so it
+    // reflects the actual geometry rather than just the entity transform.
+    glm::vec3 boundsCenter{0.0f};
+    float boundsRadius{1.0f};
+
     Mesh(std::vector<Vertex> verts);
     static std::unique_ptr<Mesh> createSphere(float radius, int sectors = 20, int stacks = 20);
     static std::unique_ptr<Mesh> createPlane(float width, float height, int segmentsX = 1, int segmentsY = 1);

@@ -19,7 +19,9 @@ uniform vec3 viewPos;
 uniform mat4 lightSpaceMatrix;
 uniform mat4 view;
 uniform mat4 invView; // Precomputed inverse view from CPU
+uniform mat4 invProjection; // For reconstructing world view-rays (skybox)
 uniform float lightRadius; // New: light size parameter
+uniform bool enableSkybox;  // Procedural sky for background pixels
 
 // SSGI parameters
 uniform float ssgiStrength;
@@ -38,8 +40,9 @@ float ShadowCalculation(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir, floa
     // Improved bias calculation - more stable across different angles
     float bias = max(0.0005 * (1.0 - dot(normal, lightDir)), 0.0001);
     
-    // Distance-based shadow softness - closer to light = softer shadows
-    float shadowSoftness = clamp(lightDistance / lightRadius * 0.3, 0.5, 4.0);
+    // PCF kernel size in texels. The old floor of 0.5 left edges essentially unfiltered
+    // (jagged); widen it so the 32-tap Poisson disk actually softens the penumbra.
+    float shadowSoftness = clamp(lightDistance / lightRadius * 0.6, 2.5, 9.0);
     
     // Poisson disk sampling pattern for better shadow quality
     vec2 poissonDisk[32] = vec2[](
@@ -182,6 +185,30 @@ vec3 bilateralGI(vec2 uv, vec3 centerGI) {
     return (W > 0.0) ? (C / W) : centerGI;
 }
 
+// Procedural sky: horizon-to-zenith gradient with a sun glow, tinted by the light hue so
+// it tracks the Day/Evening light presets. dir is the world-space view direction.
+vec3 proceduralSky(vec3 dir) {
+    // Light hue only (strip the large intensity multiplier baked into lightColor).
+    float lmax = max(max(lightColor.r, lightColor.g), max(lightColor.b, 1.0));
+    vec3 tint = lightColor / lmax;
+
+    float h = clamp(dir.y, -1.0, 1.0);
+    vec3 zenith  = vec3(0.18, 0.34, 0.66);
+    vec3 horizon = vec3(0.72, 0.80, 0.92);
+    vec3 ground  = vec3(0.20, 0.20, 0.23);
+    vec3 sky = (h > 0.0) ? mix(horizon, zenith, pow(h, 0.5))
+                         : mix(horizon, ground, clamp(-h * 4.0, 0.0, 1.0));
+    sky = mix(sky, sky * tint, 0.35); // subtle warm/cool shift with the light
+
+    // Sun disk + halo toward the light.
+    vec3 sunDir = normalize(lightPos - viewPos);
+    float d = max(dot(dir, sunDir), 0.0);
+    float disk = pow(d, 2000.0);
+    float glow = pow(d, 8.0) * 0.4;
+    sky += tint * (disk * 6.0 + glow);
+    return sky;
+}
+
 void main()
 {
     vec3 position = texture(gPosition, TexCoords).xyz;
@@ -195,9 +222,19 @@ void main()
     vec3 normal = normalize(nrm);
     vec3 albedo = texture(gAlbedo, TexCoords).rgb;
     
-    // Early exit for background pixels
-    if (length(normal) < 0.1) {
-        FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    // Background pixels (no geometry): the g-buffer position is cleared to (0,0,0) there
+    // (a real fragment is never exactly at the view-space origin). NB: the decoded normal
+    // is always unit-length, so a normal-based test would never fire - use position.
+    if (dot(position, position) < 1e-6) {
+        if (enableSkybox) {
+            vec4 clip = vec4(TexCoords * 2.0 - 1.0, 1.0, 1.0);
+            vec4 viewH = invProjection * clip;
+            vec3 viewDir = normalize(viewH.xyz / viewH.w);
+            vec3 worldDir = normalize(mat3(invView) * viewDir);
+            FragColor = vec4(proceduralSky(worldDir), 1.0);
+        } else {
+            FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        }
         return;
     }
     

@@ -11,6 +11,7 @@ uniform sampler2D gLinearDepth;
 uniform sampler2D gEmission;
 uniform sampler2D previousCascade;
 uniform sampler2D temporalBuffer;
+uniform sampler2D gVelocity;     // Screen-space motion vector (UV delta), from G-buffer
 
 // Cascade parameters
 uniform int cascadeIndex;
@@ -51,6 +52,14 @@ uniform int samplingMethod; // 0..N per enum in C++
 // Simple random function using spatial coordinates
 float rand(vec2 co) {
     return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Interleaved gradient noise (Jimenez) - cheap, well-distributed per-pixel hash.
+// Used to decorrelate sample patterns across neighbouring pixels and across frames
+// so that under-sampling shows up as high-frequency noise (blurrable + temporally
+// accumulatable) instead of stable low-frequency blotches.
+float interleavedGradientNoise(vec2 p) {
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
 }
 
 // Generate better distributed samples using spatial-temporal seeding
@@ -187,19 +196,30 @@ vec4 computeRadiance(vec2 uv, int index) {
     vec3 gi = vec3(0.0);
     int numHits = 0;
     
-    // Enhanced sampling parameters for ultra-smooth results
-    int numSamples = max(16, angularSamples);
-    numSamples = min(numSamples, 80); // Increased cap for cascade 0 (was 48)
+    // Angular sample budget comes from the per-cascade allocation (near cascades few,
+    // far cascades many - see RadianceCascades::initializeBandLimitingParameters). The low
+    // floor lets cascade 0 be genuinely cheap; temporal accumulation recovers the variance.
+    int numSamples = clamp(angularSamples, 4, 128);
     
     float minDist = minDistance;
     float maxDist = maxDistance;
     float thickness = 0.08 + minDist * 0.02; // Adaptive thickness
     
     int numSteps = max(1, rayMarchSteps); // Steps along each ray (set from CPU)
-    
+
+    // Per-pixel + per-frame Cranley-Patterson rotation. Decorrelates the (otherwise
+    // identical-per-pixel, identical-per-frame) stratified pattern so the residual
+    // error is high-frequency and averages out under temporal accumulation. This is
+    // the primary fix for the blotchy GI look.
+    float frameSeed = float(frameCounter & 255);
+    vec2 cpRotation = vec2(
+        interleavedGradientNoise(gl_FragCoord.xy + frameSeed * vec2(11.0, 23.0)),
+        interleavedGradientNoise(gl_FragCoord.xy + frameSeed * vec2(37.0, 17.0) + 113.0)
+    );
+
     for (int s = 0; s < numSamples; ++s) {
-        // Get well-distributed sample direction
-        vec2 sampleUV = getSample(s, numSamples, uv);
+        // Get well-distributed sample direction, then toroidally shift it (CP rotation).
+        vec2 sampleUV = fract(getSample(s, numSamples, uv) + cpRotation);
         vec3 worldDir = getHemisphereSample(worldNormal, sampleUV);
         
         float stepSize = (maxDist - minDist) / float(numSteps);
@@ -243,23 +263,23 @@ vec4 computeRadiance(vec2 uv, int index) {
             t += stepSize;
         }
         
-        // Enhanced cascade blending with previous cascade
+        // Cascade merge operator M(R_near, R_far) = I_near + exp(-tau_near) * I_far
+        // (arXiv:2408.14425 eq. 11). This ray found no occluder within the cascade's
+        // interval, so its near-field transmittance is ~1 and the far (previous) cascade's
+        // radiance propagates through essentially unattenuated - no lossy fixed weight.
         if (!hit && hasPreviousCascade) {
-            vec4 prevData = texture(previousCascade, TexCoords);
-            vec3 prevRadiance = prevData.rgb;
-            float prevBeta = prevData.a;
-            
-            // Implement cascade overlap and soft blending
-            float blendWeight = 0.4 * (1.0 - prevBeta);
-            
-            // Apply distance-based blend factor if cascade blending is enabled
+            vec3 prevRadiance = texture(previousCascade, TexCoords).rgb;
+            float cosTerm = max(0.0, dot(worldNormal, worldDir));
+            float transmittance = 1.0; // near interval was clear for this direction
+
+            // Only the overlap fade remains, purely to avoid double-counting energy in the
+            // band where this cascade's interval overlaps the next one's.
             if (enableCascadeBlending) {
-                float distanceToSample = t;
-                float blendFactor = smoothstep(cascadeOverlapStart, cascadeOverlapEnd, distanceToSample);
-                blendWeight *= (1.0 - blendFactor); // Fade out as we approach next cascade range
+                float blendFactor = smoothstep(cascadeOverlapStart, cascadeOverlapEnd, t);
+                transmittance *= (1.0 - blendFactor);
             }
-            
-            gi += prevRadiance * max(0.0, dot(worldNormal, worldDir)) * blendWeight;
+
+            gi += prevRadiance * transmittance * cosTerm;
         }
     }
     
@@ -268,17 +288,35 @@ vec4 computeRadiance(vec2 uv, int index) {
     }
     float beta = float(numSamples - numHits) / float(numSamples);
     
-    // Enhanced temporal accumulation with more responsive blending
+    // Temporal accumulation with motion-vector reprojection.
+    // Sampling history at the *reprojected* UV (TexCoords - velocity) instead of the
+    // current pixel is what lets the per-frame-rotated samples (above) accumulate into
+    // smooth GI under camera motion instead of smearing/ghosting.
     if (useTemporalAccumulation && frameCounter > 0) {
-        vec4 temporal = texture(temporalBuffer, TexCoords);
-        vec3 temporalGi = temporal.rgb;
-        float temporalBeta = temporal.a;
-        
-        if (length(temporalGi) > 0.001) {
-            // Adaptive blending based on cascade index - cascade 0 more responsive
-            float blendFactor = (cascadeIndex == 0) ? 0.35 : 0.25; // 35% for cascade 0, 25% for others
-            gi = mix(temporalGi, gi, blendFactor);
-            beta = mix(temporalBeta, beta, blendFactor);
+        vec2 velocity = texture(gVelocity, TexCoords).xy;
+        vec2 prevUV = TexCoords - velocity;
+
+        // Disocclusion / off-screen guard: reject history that reprojects outside the
+        // frame so newly-revealed surfaces don't inherit stale lighting.
+        bool validHistory = all(greaterThanEqual(prevUV, vec2(0.0))) &&
+                            all(lessThanEqual(prevUV, vec2(1.0)));
+
+        if (validHistory) {
+            vec4 temporal = texture(temporalBuffer, prevUV);
+            vec3 temporalGi = temporal.rgb;
+            float temporalBeta = temporal.a;
+
+            if (length(temporalGi) > 0.001) {
+                // Base responsiveness (cascade 0 reacts faster). Bias toward the current
+                // frame as on-screen motion grows: this is a cheap stand-in for a full
+                // neighbourhood variance clamp and suppresses ghosting trails while the
+                // estimate is still settling.
+                float baseBlend = (cascadeIndex == 0) ? 0.35 : 0.25;
+                float motion = clamp(length(velocity) * 64.0, 0.0, 1.0);
+                float blendFactor = mix(baseBlend, 1.0, motion);
+                gi = mix(temporalGi, gi, blendFactor);
+                beta = mix(temporalBeta, beta, blendFactor);
+            }
         }
     }
     

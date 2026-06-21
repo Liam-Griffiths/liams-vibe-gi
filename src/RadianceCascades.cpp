@@ -57,23 +57,27 @@ void RadianceCascades::setupCascades() {
 
     for (int i = 0; i < numCascades; ++i) {
         // ENHANCED CASCADE RESOLUTIONS for ultra-smooth GI
+        // GI is traced at HALF the previous resolution at every cascade level: the
+        // dominant cost is the per-pixel hemisphere march, and the composite already
+        // applies a depth/normal-aware bilateral upsample (bilateralGI), so the lower
+        // trace resolution is reconstructed cleanly without visible bleeding.
         int res_x, res_y;
         if (i == 0) {
-            // Cascade 0: high resolution but keep 16F to reduce bandwidth and match temporals
-            res_x = screenWidth;
-            res_y = screenHeight;
-        } else if (i == 1) {
-            // Cascade 1: Three-quarter resolution for high-quality mid-range
-            res_x = (screenWidth * 3) / 4;
-            res_y = (screenHeight * 3) / 4;
-        } else if (i == 2) {
-            // Cascade 2: Half resolution, still good detail
+            // Cascade 0: half resolution (was full) - ~4x fewer traced pixels
             res_x = screenWidth / 2;
             res_y = screenHeight / 2;
+        } else if (i == 1) {
+            // Cascade 1: was 3/4 -> 3/8 of screen
+            res_x = (screenWidth * 3) / 8;
+            res_y = (screenHeight * 3) / 8;
+        } else if (i == 2) {
+            // Cascade 2: was 1/2 -> 1/4 of screen
+            res_x = screenWidth / 4;
+            res_y = screenHeight / 4;
         } else {
-            // Higher cascades: Quarter resolution and down
-            res_x = std::max(128, screenWidth >> i);
-            res_y = std::max(128, screenHeight >> i);
+            // Higher cascades: one extra halving on top of the previous scheme
+            res_x = std::max(96, screenWidth >> (i + 1));
+            res_y = std::max(96, screenHeight >> (i + 1));
         }
         cascadeWidths[i] = res_x;
         cascadeHeights[i] = res_y;
@@ -324,7 +328,21 @@ void RadianceCascades::cleanup() {
     glDeleteFramebuffers(numCascades, temporalFBOs.data());
     glDeleteTextures(numCascades, temporalTextures.data());
     glDeleteTextures(1, &historyTexture);
-    
+
+    // Directional radiance cascade cleanup
+    if (!dirTraceFBOs.empty()) {
+        glDeleteFramebuffers(numCascades, dirTraceFBOs.data());
+        glDeleteTextures(numCascades, dirTraceTex.data());
+        glDeleteFramebuffers(numCascades, dirMergeFBOs.data());
+        glDeleteTextures(numCascades, dirMergeTex.data());
+    }
+    glDeleteFramebuffers(1, &dirGatherFBO);
+    glDeleteTextures(1, &dirGatherTex);
+    glDeleteFramebuffers(1, &dirResolvedFBO);
+    glDeleteTextures(1, &dirResolvedTex);
+    glDeleteFramebuffers(1, &dirHistFBO);
+    glDeleteTextures(1, &dirHistTex);
+
     // Hierarchical blending cleanup - disabled for performance
     /*
     glDeleteFramebuffers(1, &mergedCascadeFBO);
@@ -365,7 +383,7 @@ void RadianceCascades::resize(int width, int height) {
     setupSSR(); // Re-setup SSR on resize
 }
 
-void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm::mat4& projection, int activeCascades) {
+void RadianceCascades::compute(Shader& shader, Shader& resolveShader, const glm::mat4& view, const glm::mat4& projection, int activeCascades) {
     if (activeCascades == -1) activeCascades = numCascades; // Use all cascades by default
     shader.use();
     shader.setMat4("view", view);
@@ -373,25 +391,30 @@ void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm:
     shader.setMat4("invView", glm::inverse(view)); // Add inverse view for world space calculations
     shader.setFloat("time", glfwGetTime());
     shader.setInt("frameCounter", frameCounter);
-    shader.setBool("useTemporalAccumulation", useTemporalBuffer && frameCounter > 0);
+    // Temporal accumulation is handled by the separate resolve pass below, so the trace
+    // pass always renders a raw (non-temporal) estimate.
+    shader.setBool("useTemporalAccumulation", false);
     shader.setInt("gPosition", 0);
     shader.setInt("gNormal", 1);
     shader.setInt("gAlbedo", 2);
     shader.setInt("gLinearDepth", 3);
     shader.setInt("gEmission", 6); // Add emission texture for GI calculations (avoid conflict with previousCascade)
-    
+
     bindForReading();
     static FullscreenQuad quad; // Reuse
-    
+
+    bool useTemporal = useTemporalBuffer && frameCounter > 0;
+
     for (int i = activeCascades - 1; i >= 0; --i) {
         int res_x = cascadeWidths[i];
         int res_y = cascadeHeights[i];
-        
-        // Render to current cascade
-        glBindFramebuffer(GL_FRAMEBUFFER, cascadeFBOs[i]);
+
+        // ---- PASS A: trace raw GI into the scratch (tempBlur) target ----
+        shader.use();
+        glBindFramebuffer(GL_FRAMEBUFFER, tempBlurFBOs[i]);
         glViewport(0, 0, res_x, res_y);
         glClear(GL_COLOR_BUFFER_BIT);
-        
+
         shader.setInt("cascadeIndex", i);
         // Band-limited cascade parameters from precomputed ranges
         glm::vec2 distRange = getCascadeDistanceRange(i);
@@ -409,8 +432,9 @@ void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm:
         shader.setFloat("cascadeOverlapStart", overlapStart);
         shader.setFloat("cascadeOverlapEnd", overlapEnd);
         shader.setBool("enableCascadeBlending", i > 0);
-        
-        // Bind previous cascade (spatial hierarchy)
+
+        // Bind previous (coarser) cascade for the spatial hierarchy. cascadeTextures[i+1]
+        // already holds the temporally-resolved result from the previous loop iteration.
         if (i < numCascades - 1) {
             shader.setInt("previousCascade", 4);
             glActiveTexture(GL_TEXTURE4);
@@ -419,35 +443,220 @@ void RadianceCascades::compute(Shader& shader, const glm::mat4& view, const glm:
         } else {
             shader.setBool("hasPreviousCascade", false);
         }
-        
-        // Bind temporal buffer (temporal accumulation)
-        if (useTemporalBuffer && frameCounter > 0) {
-            shader.setInt("temporalBuffer", 5);
-            glActiveTexture(GL_TEXTURE5);
-            glBindTexture(GL_TEXTURE_2D, temporalTextures[i]);
-        } else {
-            // Ensure we don't use uninitialized temporal data
-            shader.setBool("useTemporalAccumulation", false);
-        }
-        
+
         quad.render();
-        
-        // Copy result to temporal buffer for next frame
+
+        // ---- PASS B: temporal resolve (reproject + variance clamp) into the cascade ----
+        glBindFramebuffer(GL_FRAMEBUFFER, cascadeFBOs[i]);
+        glViewport(0, 0, res_x, res_y);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        resolveShader.use();
+        resolveShader.setInt("cascadeIndex", i);
+        resolveShader.setBool("hasHistory", useTemporal);
+        resolveShader.setInt("currentGI", 0);
+        resolveShader.setInt("historyGI", 1);
+        resolveShader.setInt("gVelocity", 2);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tempBlurTextures[i]); // raw current frame
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, temporalTextures[i]); // history
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, gVelocity);
+
+        quad.render();
+
+        // Restore the G-buffer bindings on units 0-3/6 for the next cascade's trace pass.
+        bindForReading();
+
+        // ---- Update history for next frame ----
         if (useTemporalBuffer) {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, cascadeFBOs[i]);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, temporalFBOs[i]);
-            glBlitFramebuffer(0, 0, res_x, res_y, 0, 0, res_x, res_y, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            glBlitFramebuffer(0, 0, res_x, res_y, 0, 0, res_x, res_y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
         }
     }
-    
+
     frameCounter++;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, screenWidth, screenHeight);
+}
+
+// ============================================================================
+// Directional radiance cascades (true RC: probe x direction atlases)
+// ============================================================================
+
+void RadianceCascades::setupDirectionalCascades() {
+    int p0w = std::max(1, screenWidth / 2);  // cascade 0 probe grid = half screen res
+    int p0h = std::max(1, screenHeight / 2);
+    dirAtlasW = p0w * dirBaseDim;             // constant atlas size for every cascade
+    dirAtlasH = p0h * dirBaseDim;
+
+    dirTraceFBOs.resize(numCascades); dirTraceTex.resize(numCascades);
+    dirMergeFBOs.resize(numCascades); dirMergeTex.resize(numCascades);
+    dirProbeW.resize(numCascades); dirProbeH.resize(numCascades); dirDimV.resize(numCascades);
+
+    glGenFramebuffers(numCascades, dirTraceFBOs.data());
+    glGenTextures(numCascades, dirTraceTex.data());
+    glGenFramebuffers(numCascades, dirMergeFBOs.data());
+    glGenTextures(numCascades, dirMergeTex.data());
+
+    for (int i = 0; i < numCascades; ++i) {
+        int dim = dirBaseDim << i;            // directions-per-axis doubles per cascade
+        dirDimV[i] = dim;
+        dirProbeW[i] = std::max(1, dirAtlasW / dim);  // probes halve per axis per cascade
+        dirProbeH[i] = std::max(1, dirAtlasH / dim);
+
+        for (int pass = 0; pass < 2; ++pass) {
+            unsigned int tex = (pass == 0) ? dirTraceTex[i] : dirMergeTex[i];
+            unsigned int fbo = (pass == 0) ? dirTraceFBOs[i] : dirMergeFBOs[i];
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, dirAtlasW, dirAtlasH, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+            // NEAREST: the atlas tiles direction cells, so filtering would bleed across them.
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                std::cerr << "Directional cascade FBO " << i << " incomplete!" << std::endl;
+        }
+    }
+
+    // Screen-resolution gather / temporally-resolved / history buffers.
+    auto makeScreenTex = [&](unsigned int& fbo, unsigned int& tex) {
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, screenWidth, screenHeight, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    };
+    makeScreenTex(dirGatherFBO, dirGatherTex);
+    makeScreenTex(dirResolvedFBO, dirResolvedTex);
+    makeScreenTex(dirHistFBO, dirHistTex);
+
+    dirFrameCounter = 0;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void RadianceCascades::computeDirectional(Shader& traceShader, Shader& mergeShader, Shader& gatherShader,
+        Shader& resolveShader, const glm::mat4& view, const glm::mat4& projection,
+        int activeCascades, const glm::vec3& lightPos, const glm::vec3& lightColor,
+        float lightRadius, int rayMarchSteps) {
+    if (activeCascades <= 0 || activeCascades > numCascades) activeCascades = numCascades;
+    static FullscreenQuad quad;
+    glm::mat4 invView = glm::inverse(view);
+
+    // ---- PASS A: trace every active cascade (one global direction per atlas texel) ----
+    traceShader.use();
+    traceShader.setMat4("view", view);
+    traceShader.setMat4("projection", projection);
+    traceShader.setMat4("invView", invView);
+    traceShader.setVec3("lightPos", lightPos);
+    traceShader.setVec3("lightColor", lightColor);
+    traceShader.setFloat("lightRadius", lightRadius);
+    traceShader.setInt("rayMarchSteps", rayMarchSteps);
+    traceShader.setInt("gPosition", 0);
+    traceShader.setInt("gNormal", 1);
+    traceShader.setInt("gAlbedo", 2);
+    traceShader.setInt("gLinearDepth", 3);
+    traceShader.setInt("gEmission", 5);
+    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, gPosition);
+    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, gNormal);
+    glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, gAlbedo);
+    glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, gDepth);
+    glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, gEmission);
+    for (int i = 0; i < activeCascades; ++i) {
+        glBindFramebuffer(GL_FRAMEBUFFER, dirTraceFBOs[i]);
+        glViewport(0, 0, dirAtlasW, dirAtlasH);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glm::vec2 range = getCascadeDistanceRange(i);
+        traceShader.setFloat("minDistance", range.x);
+        traceShader.setFloat("maxDistance", range.y);
+        traceShader.setInt("probeCountX", dirProbeW[i]);
+        traceShader.setInt("probeCountY", dirProbeH[i]);
+        traceShader.setInt("dirDim", dirDimV[i]);
+        quad.render();
+    }
+
+    // ---- PASS B: hierarchical merge far -> near into dirMergeTex ----
+    mergeShader.use();
+    mergeShader.setInt("traceTex", 0);
+    mergeShader.setInt("upperTex", 1);
+    for (int i = activeCascades - 1; i >= 0; --i) {
+        glBindFramebuffer(GL_FRAMEBUFFER, dirMergeFBOs[i]);
+        glViewport(0, 0, dirAtlasW, dirAtlasH);
+        glClear(GL_COLOR_BUFFER_BIT);
+        mergeShader.setInt("dirDim", dirDimV[i]);
+        mergeShader.setInt("probeCountX", dirProbeW[i]);
+        mergeShader.setInt("probeCountY", dirProbeH[i]);
+        bool hasUpper = (i < activeCascades - 1);
+        mergeShader.setBool("hasUpper", hasUpper);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, dirTraceTex[i]);
+        if (hasUpper) {
+            mergeShader.setInt("upperProbeCountX", dirProbeW[i + 1]);
+            mergeShader.setInt("upperProbeCountY", dirProbeH[i + 1]);
+            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, dirMergeTex[i + 1]);
+        } else {
+            mergeShader.setInt("upperProbeCountX", dirProbeW[i]);
+            mergeShader.setInt("upperProbeCountY", dirProbeH[i]);
+        }
+        quad.render();
+    }
+
+    // ---- PASS C: cosine-weighted screen-space gather from cascade 0 (fully merged) ----
+    gatherShader.use();
+    gatherShader.setMat4("invView", invView);
+    gatherShader.setInt("dirTex0", 0);
+    gatherShader.setInt("gNormal", 1);
+    gatherShader.setInt("gLinearDepth", 2);
+    gatherShader.setInt("probeCountX", dirProbeW[0]);
+    gatherShader.setInt("probeCountY", dirProbeH[0]);
+    gatherShader.setInt("dirDim", dirDimV[0]);
+    glBindFramebuffer(GL_FRAMEBUFFER, dirGatherFBO);
+    glViewport(0, 0, screenWidth, screenHeight);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, dirMergeTex[0]);
+    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, gNormal);
+    glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, gDepth);
+    quad.render();
+
+    // ---- PASS D: temporal reprojection of the gathered irradiance ----
+    resolveShader.use();
+    resolveShader.setInt("cascadeIndex", 0);
+    resolveShader.setBool("hasHistory", dirFrameCounter > 0);
+    resolveShader.setInt("currentGI", 0);
+    resolveShader.setInt("historyGI", 1);
+    resolveShader.setInt("gVelocity", 2);
+    glBindFramebuffer(GL_FRAMEBUFFER, dirResolvedFBO);
+    glViewport(0, 0, screenWidth, screenHeight);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, dirGatherTex);
+    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, dirHistTex);
+    glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, gVelocity);
+    quad.render();
+
+    // history <- resolved (for next frame's reprojection)
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, dirResolvedFBO);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dirHistFBO);
+    glBlitFramebuffer(0, 0, screenWidth, screenHeight, 0, 0, screenWidth, screenHeight,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+    dirFrameCounter++;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, screenWidth, screenHeight);
 }
 
 void RadianceCascades::resetTemporalAccumulation() {
     frameCounter = 0;
-    
+    dirFrameCounter = 0; // also restart directional-path accumulation
+
     // Clear all temporal buffers
     for (int i = 0; i < numCascades; ++i) {
         glBindFramebuffer(GL_FRAMEBUFFER, temporalFBOs[i]);
@@ -789,21 +998,23 @@ void RadianceCascades::initializeBandLimitingParameters() {
     cascadeMaxDistances.resize(numCascades);
     cascadeAngularSamples.resize(numCascades);
     
-    // Calculate optimal distance ranges for band-limited sampling
+    // Radiance Cascades scaling laws (Sannikov; arXiv:2408.14425 S2.3).
+    // Per cascade i the interval length doubles (t_i ~ 2^i) and, by the penumbra
+    // criterion, angular resolution must INCREASE with distance (Dw ~ 2^i) while spatial
+    // probe density decreases. The far field has high angular / low spatial frequency, so
+    // far cascades carry many angular samples; the near field is the opposite.
     for (int i = 0; i < numCascades; ++i) {
-        // Exponential progression for distance ranges
-        // Each cascade covers roughly 2x the distance of the previous one
-        cascadeMinDistances[i] = pow(2.0f, float(i));  // Remove 0.1f multiplier for proper scene scale
-        cascadeMaxDistances[i] = pow(2.0f, float(i + 1));
-        
-        // Angular resolution decreases with distance (satisfies Nyquist for each band)
-        // Near-field needs more angular samples for contact shadows
-        // Far-field needs fewer angular samples for broad environment lighting
-        float t = float(i) / float(numCascades - 1);
-        cascadeAngularSamples[i] = int(nearFieldAngularSamples * (1.0f - t) + farFieldAngularSamples * t);
-        
-        // Ensure minimum quality
-        cascadeAngularSamples[i] = std::max(cascadeAngularSamples[i], 8);
+        // Geometric interval progression, started small so the cascades actually tile a
+        // typical (few-unit) scene instead of cascade 0 already spanning the whole room.
+        cascadeMinDistances[i] = cascadeBaseInterval * pow(2.0f, float(i));
+        cascadeMaxDistances[i] = cascadeBaseInterval * pow(2.0f, float(i + 1));
+
+        // Angular samples DOUBLE per cascade (near -> far), capped at the far-field budget.
+        // This is the inverse of the old (penumbra-violating) allocation and is nearly
+        // free because far cascades are rendered at much lower spatial resolution.
+        int samples = int(std::lround(nearFieldAngularSamples * pow(2.0f, float(i))));
+        cascadeAngularSamples[i] = std::min(samples, farFieldAngularSamples);
+        cascadeAngularSamples[i] = std::max(cascadeAngularSamples[i], 4);
     }
 }
 

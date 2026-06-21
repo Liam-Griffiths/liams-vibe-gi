@@ -110,8 +110,36 @@ public:
      * @param projection Camera projection matrix
      * @param activeCascades Number of cascades to compute (-1 for all)
      */
-    void compute(Shader& shader, const glm::mat4& view, const glm::mat4& projection, int activeCascades = -1);
-    
+    void compute(Shader& shader, Shader& resolveShader, const glm::mat4& view, const glm::mat4& projection, int activeCascades = -1);
+
+    /**
+     * Allocate the directional radiance cascade atlases (probe x direction). Each cascade
+     * is a constant-size atlas; per level the probe grid quarters and the direction block
+     * quadruples (the memory-balanced radiance cascades property).
+     */
+    void setupDirectionalCascades();
+
+    /**
+     * Compute GI using TRUE directional radiance cascades: per-probe per-direction trace,
+     * hierarchical far->near merge with the transmittance operator, then a cosine-weighted
+     * screen-space gather, finished with motion-vector temporal reprojection.
+     * Result is screen-resolution indirect irradiance (see getDirectionalGI()).
+     */
+    void computeDirectional(Shader& traceShader, Shader& mergeShader, Shader& gatherShader,
+                            Shader& resolveShader, const glm::mat4& view, const glm::mat4& projection,
+                            int activeCascades, const glm::vec3& lightPos, const glm::vec3& lightColor,
+                            float lightRadius, int rayMarchSteps);
+
+    /** Screen-resolution indirect irradiance from the directional cascade path. */
+    unsigned int getDirectionalGI() const { return dirResolvedTex; }
+
+    /** World-space length of cascade 0's radiance interval. Scale up for large scenes
+     *  (e.g. glTF Sponza) so the cascades actually reach across the space. Picked up by
+     *  the per-frame band-limiting recompute. */
+    void setCascadeBaseInterval(float v) { cascadeBaseInterval = v; }
+    float getCascadeBaseInterval() const { return cascadeBaseInterval; }
+
+
     /**
      * Compute a single cascade with band-limited sampling for the specified distance range
      * 
@@ -412,12 +440,29 @@ private:
     int numCascades;                           ///< Number of cascade levels
     
     // Band-limiting Parameters
-    int nearFieldAngularSamples;               ///< Angular samples for near-field cascades
-    int farFieldAngularSamples;                ///< Angular samples for far-field cascades  
+    int nearFieldAngularSamples;               ///< Angular samples for cascade 0 (near field, smallest)
+    int farFieldAngularSamples;                ///< Angular sample cap for far cascades (largest)
     float spatialResolutionScaling;            ///< Scaling factor between cascade resolutions
+    float cascadeBaseInterval = 0.125f;        ///< World-space length of cascade 0's radiance interval (scene-scaled)
     std::vector<float> cascadeMinDistances;    ///< Minimum distance for each cascade
     std::vector<float> cascadeMaxDistances;    ///< Maximum distance for each cascade
     std::vector<int> cascadeAngularSamples;    ///< Angular sample count per cascade
+
+    // --- Directional radiance cascades (true RC: probe x direction atlases) ---
+    int dirAtlasW = 0;                         ///< Constant atlas width  (probes0_x * dirBaseDim)
+    int dirAtlasH = 0;                         ///< Constant atlas height (probes0_y * dirBaseDim)
+    int dirBaseDim = 3;                        ///< Cascade 0 directions-per-axis (3x3 = 9 dirs)
+    std::vector<unsigned int> dirTraceFBOs;    ///< Raw per-cascade trace atlases
+    std::vector<unsigned int> dirTraceTex;
+    std::vector<unsigned int> dirMergeFBOs;    ///< Merged per-cascade atlases (far->near)
+    std::vector<unsigned int> dirMergeTex;
+    std::vector<int> dirProbeW;                ///< Probe grid width per cascade
+    std::vector<int> dirProbeH;                ///< Probe grid height per cascade
+    std::vector<int> dirDimV;                  ///< Direction-block dim per cascade
+    unsigned int dirGatherFBO = 0, dirGatherTex = 0;     ///< Raw screen-res gather
+    unsigned int dirResolvedFBO = 0, dirResolvedTex = 0; ///< Temporally resolved GI (consumed by composite)
+    unsigned int dirHistFBO = 0, dirHistTex = 0;         ///< Gather history for reprojection
+    int dirFrameCounter = 0;
     
     // Hierarchical Blending Resources
     unsigned int mergedCascadeFBO;             ///< Framebuffer for final merged result

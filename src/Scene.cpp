@@ -35,11 +35,12 @@
  * Creates the main scene and loads the default teapot lightbox demo.
  * Sets up camera at a good viewing position for the demo content.
  */
-Scene::Scene() : camera(glm::vec3(0.0f, 0.0f, 5.0f)), currentScene(CORNELL_BOX) {
-    // Load the traditional Cornell box scene - classic computer graphics test scene
-    loadCornellBox();
-    
+Scene::Scene() : camera(glm::vec3(0.0f, 0.0f, 5.0f)), currentScene(GLTF_SPONZA) {
+    // Default to the glTF Sponza PBR scene (run scripts/fetch_sponza.sh to get the asset).
+    loadScene(GLTF_SPONZA);
+
     // Alternative scenes available for different testing scenarios:
+    // loadCornellBox();        // Classic Cornell box test scene
     // loadTeapotLightbox();    // Teapot with PBR materials in lightbox setup
     // loadStoneFloorScene();   // PBR material testing with detailed textures
     // loadShadowTestScene();   // Shadow mapping testing with multiple objects
@@ -977,6 +978,9 @@ void Scene::loadScene(SceneType sceneType) {
         case SPONZA_OVERHEAD:
             loadSponzaScene();
             break;
+        case GLTF_SPONZA:
+            loadGLTFScene("models/Sponza/Sponza.gltf");
+            break;
     }
 }
 
@@ -988,6 +992,7 @@ std::string Scene::getSceneName(SceneType sceneType) const {
         case SHADOW_TEST: return "Shadow Test";
         case DEFAULT_LIGHTBOX: return "Default Lightbox";
         case SPONZA_OVERHEAD: return "Sponza Overhead";
+        case GLTF_SPONZA: return "Sponza (glTF PBR)";
         default: return "Unknown Scene";
     }
 }
@@ -1111,3 +1116,47 @@ void Scene::loadSponzaScene() {
     std::cout << "  - Camera positioned for optimal architectural viewing" << std::endl;
     std::cout << "  - Perfect for testing GI with complex geometry and dramatic lighting" << std::endl;
 } 
+/**
+ * Load a glTF scene (e.g. glTF Sponza) via the GLTFLoader.
+ * One entity per primitive (identity transform - node transforms are baked into the
+ * vertices at load), each with its imported PBR material, plus an overhead light scaled
+ * to the model bounds. The Scene owns gltfModel, which keeps the meshes/textures alive.
+ */
+void Scene::loadGLTFScene(const std::string& path) {
+    entities.clear();
+
+    gltfModel = loadGLTF(path);
+    if (!gltfModel.loaded) {
+        std::cerr << "glTF scene not loaded: " << path
+                  << "\n  -> Asset missing? Fetch it with: ./scripts/fetch_sponza.sh" << std::endl;
+    }
+
+    // Build a renderable entity for every primitive.
+    for (auto& inst : gltfModel.instances) {
+        auto e = std::make_unique<Entity>();
+        e->addComponent(std::make_unique<TransformComponent>(glm::vec3(0.0f))); // baked transform
+        e->addComponent(std::make_unique<MeshComponent>(inst.mesh, glm::vec3(1.0f)));
+        // Copy the (non-owning) template material so each entity owns its MaterialComponent
+        // while still sharing the GLTFModel-owned textures.
+        e->addComponent(std::make_unique<MaterialComponent>(std::make_unique<Material>(*inst.material)));
+        entities.push_back(std::move(e));
+    }
+
+    // Overhead light scaled to the scene extent.
+    glm::vec3 center = (gltfModel.boundsMin + gltfModel.boundsMax) * 0.5f;
+    glm::vec3 size = gltfModel.boundsMax - gltfModel.boundsMin;
+    float extent = std::max(0.001f, glm::length(size));
+
+    auto light = std::make_unique<Entity>();
+    light->addComponent(std::make_unique<TransformComponent>(
+        glm::vec3(center.x, gltfModel.boundsMax.y * 0.95f, center.z)));
+    light->addComponent(std::make_unique<LightComponent>(
+        glm::vec3(1.0f, 0.96f, 0.9f), extent * 3.0f, extent * 0.6f));
+    entities.push_back(std::move(light));
+
+    // Drop the camera roughly in the middle of the scene looking down its long axis.
+    camera.position = glm::vec3(center.x, center.y, center.z);
+
+    std::cout << "glTF scene ready: " << entities.size() << " entities, bounds extent "
+              << extent << std::endl;
+}
